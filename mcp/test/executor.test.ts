@@ -66,6 +66,16 @@ describe("executeFlow with a fake maestro", () => {
     expect(result.errorTail).toContain("Assertion is false");
   });
 
+  it("reports error, not failed, when Maestro says the device is not connected", async () => {
+    const notConnected = join(dir, "maestro-unplugged");
+    writeFileSync(notConnected, `#!/bin/sh\necho "Device X was requested, but it is not connected." >&2\nexit 1\n`);
+    chmodSync(notConnected, 0o755);
+    const run = executeFlow({ bin: notConnected, artifactsDir: join(dir, "run-unplugged") });
+    const result = await run(job("ok.yaml"), device("emulator-5554"), noSignal);
+    expect(result.status).toBe("error");
+    expect(result.errorTail).toContain("not usable by Maestro");
+  });
+
   it("reports error when the binary cannot start", async () => {
     const run = executeFlow({ bin: join(dir, "does-not-exist"), artifactsDir: join(dir, "run-missing") });
     const result = await run(job("ok.yaml"), device("emulator-5554"), noSignal);

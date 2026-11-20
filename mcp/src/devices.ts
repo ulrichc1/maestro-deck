@@ -32,13 +32,15 @@ interface DevicectlEntry {
   identifier: string;
   deviceProperties?: { name?: string };
   hardwareProperties?: { platform?: string; reality?: string };
-  connectionProperties?: { tunnelState?: string };
+  connectionProperties?: { tunnelState?: string; transportType?: string };
 }
 
 /**
  * Parses `xcrun devicectl list devices --json-output <file>` (Xcode 15+).
  * Covers simulators (reality "simulated") and physical iPhones ("physical").
- * A physical phone is usable only when its tunnelState is "connected".
+ * A physical phone is usable only when its tunnelState is "connected" AND it
+ * is attached by cable ("wired"). A phone reached over "localNetwork" is listed
+ * as connected but Maestro refuses it ("was requested, but it is not connected").
  * Simulators are usable when booted (tunnelState "connected").
  */
 export function parseDevicectl(json: { result?: { devices?: DevicectlEntry[] } }): Device[] {
@@ -46,13 +48,15 @@ export function parseDevicectl(json: { result?: { devices?: DevicectlEntry[] } }
   for (const entry of json.result?.devices ?? []) {
     if (entry.hardwareProperties?.platform !== "iOS") continue;
     const state = entry.connectionProperties?.tunnelState ?? "unknown";
+    const virtual = entry.hardwareProperties?.reality !== "physical";
+    const wired = entry.connectionProperties?.transportType === "wired";
     devices.push({
       id: entry.identifier,
       name: entry.deviceProperties?.name ?? entry.identifier,
       platform: "ios",
-      state,
-      virtual: entry.hardwareProperties?.reality !== "physical",
-      usable: state === "connected",
+      state: !virtual && state === "connected" && !wired ? "connected-network" : state,
+      virtual,
+      usable: state === "connected" && (virtual || wired),
     });
   }
   return devices;

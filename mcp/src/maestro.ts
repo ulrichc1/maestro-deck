@@ -97,11 +97,12 @@ export function executeFlow(opts: ExecuteOptions) {
     return new Promise((resolve) => {
       const started = Date.now();
       const child = spawn(opts.bin, args, { stdio: ["ignore", "pipe", "pipe"] });
-      let stderr = "";
-      child.stderr.on("data", (chunk: Buffer) => {
-        stderr = (stderr + chunk.toString()).slice(-4000);
-      });
-      child.stdout.resume();
+      let output = "";
+      const collect = (chunk: Buffer) => {
+        output = (output + chunk.toString()).slice(-8000);
+      };
+      child.stderr.on("data", collect);
+      child.stdout.on("data", collect);
 
       const onAbort = () => child.kill("SIGTERM");
       signal.addEventListener("abort", onAbort, { once: true });
@@ -118,12 +119,24 @@ export function executeFlow(opts: ExecuteOptions) {
           return;
         }
         const passed = code === 0;
+        // Maestro refused the device before any flow ran: an infrastructure
+        // problem, not a test failure, so it must not count as a red flow.
+        if (!passed && /is not connected/.test(output)) {
+          resolve({
+            status: "error",
+            durationMs,
+            exitCode: code,
+            reportPath: null,
+            errorTail: `Device not usable by Maestro: ${output.match(/was requested, but it is not connected\.?/)?.[0] ?? "not connected"}`,
+          });
+          return;
+        }
         resolve({
           status: passed ? "passed" : "failed",
           durationMs,
           exitCode: code,
           reportPath: existsSync(reportPath) ? reportPath : null,
-          errorTail: passed ? null : failureMessage(reportPath) ?? (stderr.trim().slice(-1000) || null),
+          errorTail: passed ? null : failureMessage(reportPath) ?? (output.trim().slice(-1000) || null),
         });
       });
     });

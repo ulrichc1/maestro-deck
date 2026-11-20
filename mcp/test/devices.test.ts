@@ -52,4 +52,28 @@ describe("parseDevicectl", () => {
     expect(devices[0]).toMatchObject({ id: "A5639C88", platform: "ios", virtual: true, usable: true });
     expect(devices[1]).toMatchObject({ id: "9DDA20F3", platform: "ios", virtual: false, usable: false, state: "unavailable" });
   });
+
+  it("does not use a physical iPhone reached over the local network", () => {
+    const json = {
+      result: {
+        devices: [
+          {
+            identifier: "9DDA20F3",
+            deviceProperties: { name: "IphoneU" },
+            hardwareProperties: { platform: "iOS", reality: "physical" },
+            connectionProperties: { tunnelState: "connected", transportType: "localNetwork" },
+          },
+          {
+            identifier: "00008130",
+            deviceProperties: { name: "IphoneCable" },
+            hardwareProperties: { platform: "iOS", reality: "physical" },
+            connectionProperties: { tunnelState: "connected", transportType: "wired" },
+          },
+        ],
+      },
+    };
+    const [network, cable] = parseDevicectl(json);
+    expect(network).toMatchObject({ usable: false, state: "connected-network" });
+    expect(cable).toMatchObject({ usable: true, virtual: false });
+  });
 });
