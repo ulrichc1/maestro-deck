@@ -2,6 +2,8 @@
 name: Maestro Deck action test
 
 on:
+  push:
+    branches: [feat/mcp]
   workflow_dispatch:
 
 permissions:
