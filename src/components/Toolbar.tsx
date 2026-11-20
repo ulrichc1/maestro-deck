@@ -460,7 +460,10 @@ export function Toolbar({ onRun, onRunAll, onStop }: ToolbarProps) {
               <>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <ToolbarCell onClick={onRunAll} disabled={!folderPath}>
+                    <ToolbarCell
+                      onClick={onRunAll}
+                      disabled={!folderPath || (cloudTarget !== null && !cloudApk)}
+                    >
                       <ListChecks className="h-4 w-4" />
                       Run all
                     </ToolbarCell>
