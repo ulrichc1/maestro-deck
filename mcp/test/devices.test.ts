@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAdbDevices, parseDevicectl } from "../src/devices.js";
+import { parseAdbDevices, parseDevicectl, parseSimctl } from "../src/devices.js";
 
 describe("parseAdbDevices", () => {
   it("reads usable emulators and physical phones, keeps offline state", () => {
@@ -75,5 +75,24 @@ describe("parseDevicectl", () => {
     const [network, cable] = parseDevicectl(json);
     expect(network).toMatchObject({ usable: false, state: "connected-network" });
     expect(cable).toMatchObject({ usable: true, virtual: false });
+  });
+});
+
+describe("parseSimctl", () => {
+  it("marks booted iOS simulators usable and skips unavailable or non-iOS ones", () => {
+    const json = {
+      devices: {
+        "com.apple.CoreSimulator.SimRuntime.iOS-26-4": [
+          { name: "iPhone 17 Pro", udid: "A", state: "Booted", isAvailable: true },
+          { name: "iPhone 16e", udid: "B", state: "Shutdown", isAvailable: true },
+          { name: "iPhone old", udid: "C", state: "Booted", isAvailable: false },
+        ],
+        "com.apple.CoreSimulator.SimRuntime.watchOS-26-2": [
+          { name: "Apple Watch", udid: "D", state: "Booted", isAvailable: true },
+        ],
+      },
+    };
+    const devices = parseSimctl(json);
+    expect(devices.map((d) => [d.id, d.usable])).toEqual([["A", true], ["B", false]]);
   });
 });

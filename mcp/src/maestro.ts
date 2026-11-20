@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
-import { parseAdbDevices, parseDevicectl } from "./devices.js";
+import { parseAdbDevices, parseDevicectl, parseSimctl } from "./devices.js";
 import type { Device, Job, JobResult } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -58,7 +58,22 @@ export async function discoverDevices(adbBin: string): Promise<Device[]> {
     devices.push(...parseDevicectl(JSON.parse(readFileSync(file, "utf8"))));
     rmSync(dir, { recursive: true, force: true });
   } catch {
-    // Xcode or devicectl missing: no iOS devices.
+    // Xcode or devicectl missing: no iOS devices from devicectl.
+  }
+  try {
+    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "available", "-j"], { timeout: 60_000, maxBuffer: 20 * 1024 * 1024 });
+    for (const sim of parseSimctl(JSON.parse(stdout))) {
+      // A booted simulator is usable even if devicectl listed it as disconnected.
+      const existing = devices.find((d) => d.id === sim.id);
+      if (existing) {
+        existing.usable = existing.usable || sim.usable;
+        existing.state = sim.usable ? "connected" : existing.state;
+      } else {
+        devices.push(sim);
+      }
+    }
+  } catch {
+    // simctl missing: no simulator information.
   }
   return devices;
 }

@@ -96,6 +96,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   if (feasibility.feasible === "no") {
     console.error(`maestro-deck-run: mode ${args.mode} cannot run here: ${feasibility.reason}`);
     console.error(`Usable devices: ${usable.map((d) => `${d.platform}:${d.id} (${d.name})`).join(", ") || "none"}`);
+    console.error(`All devices seen (for diagnosis): ${devices.map((d) => `${d.platform}:${d.id} ${d.name} state=${d.state} usable=${d.usable}`).join("; ") || "none"}`);
     return EXIT.INFRA;
   }
   if (feasibility.feasible === "with_reserve") console.log(`note: ${feasibility.reason}`);

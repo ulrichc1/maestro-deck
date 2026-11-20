@@ -62,6 +62,37 @@ export function parseDevicectl(json: { result?: { devices?: DevicectlEntry[] } }
   return devices;
 }
 
+interface SimctlDevice {
+  name: string;
+  udid: string;
+  state: string;
+  isAvailable?: boolean;
+}
+
+/**
+ * Parses `xcrun simctl list devices available -j`. A simulator is usable when
+ * its state is "Booted". Used as a second source because devicectl does not
+ * always report a booted simulator as connected (seen on hosted macOS runners).
+ */
+export function parseSimctl(json: { devices?: Record<string, SimctlDevice[]> }): Device[] {
+  const devices: Device[] = [];
+  for (const [runtime, list] of Object.entries(json.devices ?? {})) {
+    if (!/iOS/.test(runtime)) continue;
+    for (const d of list) {
+      if (d.isAvailable === false) continue;
+      devices.push({
+        id: d.udid,
+        name: d.name,
+        platform: "ios",
+        state: d.state === "Booted" ? "connected" : d.state.toLowerCase(),
+        virtual: true,
+        usable: d.state === "Booted",
+      });
+    }
+  }
+  return devices;
+}
+
 /** Model key used to decide "same model" vs "different models". */
 export function modelOf(device: Device): string {
   return device.name.replace(/[_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();

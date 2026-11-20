@@ -33,6 +33,9 @@ outputs:
   success:
     description: "true when every flow passed."
     value: ${{ steps.run.outputs.success }}
+  exit-code:
+    description: "CLI exit code: 0 all passed, 1 a flow failed, 2 the run could not start."
+    value: ${{ steps.run.outputs.exit-code }}
   summary-path:
     description: Path of summary.json.
     value: ${{ steps.run.outputs.summary-path }}

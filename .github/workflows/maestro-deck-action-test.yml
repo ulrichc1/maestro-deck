@@ -45,7 +45,7 @@ jobs:
           output: results-ios-fail
       - name: Check the action reported failure
         run: |
-          test "${{ steps.run.outputs.success }}" = "false" && echo "OK: failure reported"
+          test "${{ steps.run.outputs.exit-code }}" = "1" && echo "OK: failed flow reported with exit 1"
 
   no-device-infra:
     name: No device on hosted runner (expected infra error, exit 2)
