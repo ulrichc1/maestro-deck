@@ -1,8 +1,14 @@
 // Copyright (c) 2026 Ethan Morisset
 // SPDX-License-Identifier: BUSL-1.1
 
-import type { CloudJobPlatform, CloudJobStatus, SubmitCloudJobInput, SubmitCloudJobResult } from "@/lib/cloudJobs";
+import type {
+  CloudJobPlatform,
+  CloudJobStatus,
+  SubmitCloudJobInput,
+  SubmitCloudJobResult,
+} from "@/lib/cloudJobs";
 import type { CloudWatch, CloudWatchHandlers } from "@/lib/cloudRun";
+import type { WorkspaceNode } from "@/types";
 
 /**
  * Cloud execution modes (lot 3).
@@ -33,7 +39,7 @@ export interface CloudArtifacts {
 export function planCloudJobs(
   mode: CloudParallelMode,
   flows: string[],
-  platform: "android" | "ios",
+  platform: CloudJobPlatform,
   artifacts: CloudArtifacts,
 ): CloudPlanJob[] {
   if (flows.length === 0) throw new Error("No flow to run on the cloud.");
@@ -47,13 +53,23 @@ export function planCloudJobs(
   }
   const appPath = platform === "ios" ? artifacts.iosZip : artifacts.apk;
   if (!appPath) {
-    throw new Error(platform === "ios" ? "Choose the zipped .app simulator build for iOS first." : "Choose the .apk to install first.");
+    throw new Error(
+      platform === "ios"
+        ? "Choose the zipped .app simulator build for iOS first."
+        : "Choose the .apk to install first.",
+    );
   }
   if (mode === "sequential") return [{ platform, appPath, yamlPaths: flows }];
   return flows.map((flow) => ({ platform, appPath: appPath!, yamlPaths: [flow] }));
 }
 
-export type CloudJobState = "passed" | "failed" | "error" | "gave_up" | "not_submitted";
+export type CloudJobState =
+  | "passed"
+  | "failed"
+  | "error"
+  | "gave_up"
+  | "detached"
+  | "not_submitted";
 
 export interface CloudJobOutcome {
   platform: CloudJobPlatform;
@@ -78,7 +94,10 @@ export interface CloudParallelDeps {
  * submitted in order. If the cloud refuses one for quota, the rest are not
  * submitted, and jobs already accepted keep running and are billed.
  */
-export async function runCloudParallel(jobs: CloudPlanJob[], deps: CloudParallelDeps): Promise<CloudJobOutcome[]> {
+export async function runCloudParallel(
+  jobs: CloudPlanJob[],
+  deps: CloudParallelDeps,
+): Promise<CloudJobOutcome[]> {
   const line = deps.onLine ?? (() => {});
   const accepted: { index: number; jobId: string }[] = [];
   const outcomes: CloudJobOutcome[] = jobs.map((job) => ({
@@ -98,47 +117,76 @@ export async function runCloudParallel(jobs: CloudPlanJob[], deps: CloudParallel
       continue;
     }
     try {
-      const { jobId } = await deps.submit({ platform: job.platform, appPath: job.appPath, yamlPaths: job.yamlPaths });
+      const { jobId } = await deps.submit({
+        platform: job.platform,
+        appPath: job.appPath,
+        yamlPaths: job.yamlPaths,
+      });
       accepted.push({ index: i, jobId });
       outcomes[i].jobId = jobId;
-      line(`[cloud] job ${jobId} queued on ${job.platform} for ${job.yamlPaths.map(basename).join(", ")}`);
+      line(
+        `[cloud] job ${jobId} queued on ${job.platform} for ${job.yamlPaths.map(basename).join(", ")}`,
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       outcomes[i].state = "error";
       outcomes[i].message = `Not submitted: ${message}`;
-      line(`[cloud] ${job.platform} job for ${job.yamlPaths.map(basename).join(", ")} was not accepted: ${message}`);
+      line(
+        `[cloud] ${job.platform} job for ${job.yamlPaths.map(basename).join(", ")} was not accepted: ${message}`,
+      );
       if (deps.isQuotaError?.(err)) quotaHit = true;
     }
   }
 
   await Promise.all(
-    accepted.map(({ index, jobId }) =>
-      new Promise<void>((resolve) => {
-        deps.watch(jobId, {
-          onStatus: (status) => line(`[cloud] ${jobId} ${status}`),
-          onFinished: ({ job }: { job: CloudJobStatus }) => {
-            outcomes[index].state = job.status === "passed" ? "passed" : job.status === "error" ? "error" : "failed";
-            outcomes[index].message = job.error ?? null;
-            outcomes[index].reportUrl = job.reportUrl ?? null;
-            line(`[cloud] ${jobId} finished: ${job.status}`);
+    accepted.map(
+      ({ index, jobId }) =>
+        new Promise<void>((resolve) => {
+          let settled = false;
+          const settle = () => {
+            settled = true;
             resolve();
-          },
-          onGaveUp: () => {
-            outcomes[index].state = "gave_up";
-            outcomes[index].message = "No news for 20 minutes; the job may still finish.";
-            resolve();
-          },
-          onError: (msg: string) => {
-            outcomes[index].state = "error";
-            outcomes[index].message = msg;
-            resolve();
-          },
-        });
-      }),
+          };
+          const watch = deps.watch(jobId, {
+            onStatus: (status) => line(`[cloud] ${jobId} ${status}`),
+            onFinished: ({ job }: { job: CloudJobStatus }) => {
+              outcomes[index].state =
+                job.status === "passed" ? "passed" : job.status === "error" ? "error" : "failed";
+              outcomes[index].message = job.error ?? null;
+              outcomes[index].reportUrl = job.reportUrl ?? null;
+              line(`[cloud] ${jobId} finished: ${job.status}`);
+              settle();
+            },
+            onGaveUp: () => {
+              outcomes[index].state = "gave_up";
+              outcomes[index].message = "No news for 20 minutes; the job may still finish.";
+              settle();
+            },
+            onError: (msg: string) => {
+              outcomes[index].state = "error";
+              outcomes[index].message = msg;
+              settle();
+            },
+          });
+          // Stopped by the user before the job ended: the job keeps running in the cloud.
+          void watch.then(() => {
+            if (settled) return;
+            outcomes[index].state = "detached";
+            outcomes[index].message = "Stopped watching; the job continues in the cloud.";
+            settle();
+          });
+        }),
     ),
   );
 
   return outcomes;
+}
+
+/** Flow files (.yaml / .yml) under a workspace tree, in tree order. */
+export function flowPaths(node: WorkspaceNode | null): string[] {
+  if (!node) return [];
+  if (node.kind === "file") return /\.ya?ml$/i.test(node.name) ? [node.path] : [];
+  return node.children.flatMap((child) => flowPaths(child));
 }
 
 /** True only when every job was accepted and passed. */

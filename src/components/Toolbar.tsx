@@ -460,14 +460,14 @@ export function Toolbar({ onRun, onRunAll, onStop }: ToolbarProps) {
               <>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <ToolbarCell onClick={onRunAll} disabled={!folderPath || cloudTarget !== null}>
+                    <ToolbarCell onClick={onRunAll} disabled={!folderPath}>
                       <ListChecks className="h-4 w-4" />
                       Run all
                     </ToolbarCell>
                   </TooltipTrigger>
                   <TooltipContent>
                     {cloudTarget
-                      ? "Run all is local-only for now — clear the cloud target to use it"
+                      ? "Run every flow of the folder on the cloud, split by the mode chosen in the device panel"
                       : folderPath
                         ? "Run every flow in the workspace"
                         : "Open a folder to enable"}

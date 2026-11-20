@@ -63,6 +63,7 @@ interface RunState {
   setStopped: (exitCode: number | null) => void;
   /** Marks the run as live in the cloud. There is no pid to report. */
   cloudRunStarted: (jobId: string) => void;
+  cloudParallelStarted: () => void;
   cloudStatusChanged: (status: string) => void;
   setRunTarget: (target: {
     path: string;
@@ -272,6 +273,8 @@ export const useRunStore = create<RunState>((set, get) => ({
       cloud: { jobId, status: "pending" },
     }),
   cloudStatusChanged: (status) => set((s) => (s.cloud ? { cloud: { ...s.cloud, status } } : {})),
+  cloudParallelStarted: () =>
+    set({ running: true, starting: false, pid: null, exitCode: null, cloud: null }),
   setRunTarget: ({ path, kind, expectedFlow }) =>
     set({
       runTarget: { path, kind },

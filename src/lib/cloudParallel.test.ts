@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { cloudRunPassed, planCloudJobs, runCloudParallel, type CloudJobOutcome } from "./cloudParallel";
+import type { CloudRunDetail } from "@/lib/cloudJobs";
+import type { CloudWatch, CloudWatchHandlers } from "@/lib/cloudRun";
+import {
+  cloudRunPassed,
+  flowPaths,
+  planCloudJobs,
+  runCloudParallel,
+  type CloudJobOutcome,
+} from "./cloudParallel";
 
 const artifacts = { apk: "/a/app.apk", iosZip: "/a/App.zip" };
 
@@ -25,8 +33,12 @@ describe("planCloudJobs", () => {
   });
 
   it("refuses a run with a missing artefact before anything is sent", () => {
-    expect(() => planCloudJobs("parallel", flows, "android", { apk: null, iosZip: "/a/App.zip" })).toThrow(/apk/);
-    expect(() => planCloudJobs("ios_android", flows, "android", { apk: "/a/app.apk", iosZip: null })).toThrow(/zipped/);
+    expect(() =>
+      planCloudJobs("parallel", flows, "android", { apk: null, iosZip: "/a/App.zip" }),
+    ).toThrow(/apk/);
+    expect(() =>
+      planCloudJobs("ios_android", flows, "android", { apk: "/a/app.apk", iosZip: null }),
+    ).toThrow(/zipped/);
     expect(() => planCloudJobs("parallel", [], "android", artifacts)).toThrow(/No flow/);
   });
 });
@@ -39,16 +51,25 @@ function fakeCloud(finish: Record<string, "passed" | "failed" | "error">, refuse
     submitted,
     submit: async (input: { yamlPaths: string[]; platform: string }) => {
       const flow = input.yamlPaths[0];
-      if (refuse.includes(flow)) throw Object.assign(new Error("Quota exceeded"), { code: "QUOTA_EXCEEDED" });
+      if (refuse.includes(flow))
+        throw Object.assign(new Error("Quota exceeded"), { code: "QUOTA_EXCEEDED" });
       submitted.push(flow);
       return { jobId: `job-${next++}`, billed: true };
     },
-    watch: (jobId: string, handlers: any) => {
+    watch: (jobId: string, handlers: CloudWatchHandlers) => {
       const flow = submitted[Number(jobId.split("-")[1])];
       queueMicrotask(() =>
-        handlers.onFinished({ job: { jobId, status: finish[flow] ?? "passed", error: null, reportUrl: `https://r/${jobId}` }, detail: {} }),
+        handlers.onFinished({
+          job: {
+            jobId,
+            status: finish[flow] ?? "passed",
+            error: null,
+            reportUrl: `https://r/${jobId}`,
+          },
+          detail: { status: "passed", summary: null, logsUrl: null } as unknown as CloudRunDetail,
+        }),
       );
-      return Object.assign(Promise.resolve(), { stop() {} }) as any;
+      return Object.assign(Promise.resolve(), { stop() {} }) as unknown as CloudWatch;
     },
   };
 }
@@ -65,7 +86,12 @@ describe("runCloudParallel", () => {
 
   it("stops submitting after a quota refusal but keeps accepted jobs", async () => {
     const cloud = fakeCloud({}, ["/f/b.yaml"]);
-    const jobs = planCloudJobs("parallel", ["/f/a.yaml", "/f/b.yaml", "/f/c.yaml"], "android", artifacts);
+    const jobs = planCloudJobs(
+      "parallel",
+      ["/f/a.yaml", "/f/b.yaml", "/f/c.yaml"],
+      "android",
+      artifacts,
+    );
     const outcomes: CloudJobOutcome[] = await runCloudParallel(jobs, {
       ...cloud,
       isQuotaError: (err) => (err as { code?: string }).code === "QUOTA_EXCEEDED",
@@ -78,9 +104,63 @@ describe("runCloudParallel", () => {
   });
 
   it("is passed only when every job passed", () => {
-    const base = { platform: "ios" as const, flows: [], jobId: "x", message: null, reportUrl: null };
-    expect(cloudRunPassed([{ ...base, state: "passed" }, { ...base, state: "passed" }])).toBe(true);
-    expect(cloudRunPassed([{ ...base, state: "passed" }, { ...base, state: "gave_up" }])).toBe(false);
+    const base = {
+      platform: "ios" as const,
+      flows: [],
+      jobId: "x",
+      message: null,
+      reportUrl: null,
+    };
+    expect(
+      cloudRunPassed([
+        { ...base, state: "passed" },
+        { ...base, state: "passed" },
+      ]),
+    ).toBe(true);
+    expect(
+      cloudRunPassed([
+        { ...base, state: "passed" },
+        { ...base, state: "gave_up" },
+      ]),
+    ).toBe(false);
     expect(cloudRunPassed([])).toBe(false);
+  });
+});
+
+describe("flowPaths", () => {
+  it("collects YAML flows from the whole tree, in order, and skips other files", () => {
+    const tree = {
+      kind: "dir" as const,
+      name: "ws",
+      path: "/ws",
+      children: [
+        { kind: "file" as const, name: "login.yaml", path: "/ws/login.yaml" },
+        {
+          kind: "dir" as const,
+          name: "checkout",
+          path: "/ws/checkout",
+          children: [
+            { kind: "file" as const, name: "pay.yml", path: "/ws/checkout/pay.yml" },
+            { kind: "file" as const, name: "README.md", path: "/ws/checkout/README.md" },
+          ],
+        },
+      ],
+    };
+    expect(flowPaths(tree)).toEqual(["/ws/login.yaml", "/ws/checkout/pay.yml"]);
+    expect(flowPaths(null)).toEqual([]);
+  });
+});
+
+describe("stopping a parallel run", () => {
+  it("marks a job detached when its watch ends without a verdict", async () => {
+    const outcomes = await runCloudParallel(
+      planCloudJobs("parallel", ["/f/a.yaml"], "android", artifacts),
+      {
+        submit: async () => ({ jobId: "job-x", billed: true }),
+        watch: () => Object.assign(Promise.resolve(), { stop() {} }) as unknown as CloudWatch,
+      },
+    );
+    expect(outcomes[0].state).toBe("detached");
+    expect(cloudRunPassed(outcomes)).toBe(false);
   });
 });
