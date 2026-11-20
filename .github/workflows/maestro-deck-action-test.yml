@@ -1,9 +1,7 @@
-# Manual test of the Maestro Deck composite action (branch feat/mcp).
+# Manual test of the Maestro Deck composite action. Runs only when dispatched by hand.
 name: Maestro Deck action test
 
 on:
-  push:
-    branches: [feat/mcp]
   workflow_dispatch:
 
 permissions:
