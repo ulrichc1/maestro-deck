@@ -28,6 +28,18 @@ export function parseAdbDevices(output: string): Device[] {
   return devices;
 }
 
+/**
+ * Parses the output of `adb -s <serial> emu avd name`: the AVD name on the
+ * first line, then "OK". Emulators all report the same system-image model
+ * (for example sdk_gphone16k_arm64), so the AVD name is what tells a Pixel 10
+ * from a Pixel 10 Pro.
+ */
+export function parseAvdName(output: string): string | null {
+  const first = output.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
+  if (!first || first === "OK" || /^KO/.test(first)) return null;
+  return first;
+}
+
 interface DevicectlEntry {
   identifier: string;
   deviceProperties?: { name?: string };

@@ -30,7 +30,16 @@ export interface Job {
   deviceId: string;
 }
 
-export type JobStatus = "queued" | "running" | "passed" | "failed" | "error" | "cancelled";
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "passed"
+  | "failed"
+  /** The device or Maestro could not run the flow (infrastructure), not a test failure. */
+  | "error"
+  /** The job exceeded its time limit and was killed. */
+  | "timeout"
+  | "cancelled";
 
 export interface JobResult {
   jobId: string;
@@ -42,6 +51,10 @@ export interface JobResult {
   exitCode: number | null;
   reportPath: string | null;
   errorTail: string | null;
+  /** How many times the job was started (1 when it was never retried). */
+  attempts: number;
+  /** Every device the job ran on, in order; more than one entry means it was retried elsewhere. */
+  devicesTried: string[];
 }
 
 export type Feasibility = "yes" | "with_reserve" | "no";

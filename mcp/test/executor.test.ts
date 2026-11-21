@@ -73,7 +73,7 @@ describe("executeFlow with a fake maestro", () => {
     const run = executeFlow({ bin: notConnected, artifactsDir: join(dir, "run-unplugged") });
     const result = await run(job("ok.yaml"), device("emulator-5554"), noSignal);
     expect(result.status).toBe("error");
-    expect(result.errorTail).toContain("not usable by Maestro");
+    expect(result.errorTail).toContain("Device or driver problem");
   });
 
   it("reports error when the binary cannot start", async () => {
@@ -94,5 +94,86 @@ describe("executeFlow with a fake maestro", () => {
     delete process.env.FAKE_DELAY_MS;
     expect(result.status).toBe("cancelled");
     expect(existsSync(join(dir, "run-cancel", "job-slow.yaml"))).toBe(true);
+  });
+
+  it("reports error for a crash with a device-loss stack trace and no test result", async () => {
+    const crash = join(dir, "maestro-crash");
+    writeFileSync(
+      crash,
+      `#!/bin/sh
+echo "Exception in thread main" >&2
+echo "  at maestro.cli.session.MaestroSessionManager.newSession(MaestroSessionManager.kt:66)" >&2
+exit 1
+`,
+    );
+    chmodSync(crash, 0o755);
+    const run = executeFlow({ bin: crash, artifactsDir: join(dir, "run-crash") });
+    const result = await run(job("ok.yaml"), device("emulator-5554"), noSignal);
+    expect(result.status).toBe("error");
+    expect(result.errorTail).toContain("MaestroSessionManager");
+  });
+
+  it("keeps a real assertion failure as failed even if the output also has a stack trace", async () => {
+    const mixed = join(dir, "maestro-mixed");
+    writeFileSync(
+      mixed,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const a = process.argv.slice(2);
+fs.writeFileSync(a[a.indexOf("--output") + 1], '<testsuites><testsuite><testcase name="x"><failure>Assertion is false: "Login" is visible</failure></testcase></testsuite></testsuites>');
+console.error("at maestro.cli.session.MaestroSessionManager.close(MaestroSessionManager.kt:10)");
+process.exit(1);
+`,
+    );
+    chmodSync(mixed, 0o755);
+    const run = executeFlow({ bin: mixed, artifactsDir: join(dir, "run-mixed") });
+    const result = await run(job("ok.yaml"), device("emulator-5554"), noSignal);
+    expect(result.status).toBe("failed");
+    expect(result.errorTail).toContain("Assertion is false");
+  });
+
+  it("keeps a flow syntax error as failed: it is the flow's fault, not the device's", async () => {
+    const syntax = join(dir, "maestro-syntax");
+    writeFileSync(syntax, `#!/bin/sh\necho "Flow syntax error: unknown command tapOnn at line 4" >&2\nexit 1\n`);
+    chmodSync(syntax, 0o755);
+    const run = executeFlow({ bin: syntax, artifactsDir: join(dir, "run-syntax") });
+    const result = await run(job("ok.yaml"), device("emulator-5554"), noSignal);
+    expect(result.status).toBe("failed");
+    expect(result.errorTail).toContain("syntax error");
+  });
+
+  it("reports error when the JUnit failure is a dead device server, not an assertion", async () => {
+    const died = join(dir, "maestro-died");
+    writeFileSync(
+      died,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const a = process.argv.slice(2);
+fs.writeFileSync(a[a.indexOf("--output") + 1], '<testsuites><testsuite><testcase name="x"><failure>maestro.android.DeviceServerDiedException: Device server died during viewHierarchy on emulator-5560</failure></testcase></testsuite></testsuites>');
+process.exit(1);
+`,
+    );
+    chmodSync(died, 0o755);
+    const run = executeFlow({ bin: died, artifactsDir: join(dir, "run-died") });
+    const result = await run(job("ok.yaml"), device("emulator-5560"), noSignal);
+    expect(result.status).toBe("error");
+    expect(result.errorTail).toContain("DeviceServerDiedException");
+  });
+
+  it("does not turn an app assertion that mentions UNAVAILABLE into an infrastructure error", async () => {
+    const app = join(dir, "maestro-app");
+    writeFileSync(
+      app,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const a = process.argv.slice(2);
+fs.writeFileSync(a[a.indexOf("--output") + 1], '<testsuites><testsuite><testcase name="x"><failure>Assertion is false: "Item UNAVAILABLE" is visible</failure></testcase></testsuite></testsuites>');
+process.exit(1);
+`,
+    );
+    chmodSync(app, 0o755);
+    const run = executeFlow({ bin: app, artifactsDir: join(dir, "run-app") });
+    const result = await run(job("ok.yaml"), device("emulator-5554"), noSignal);
+    expect(result.status).toBe("failed");
   });
 });

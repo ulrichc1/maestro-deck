@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAdbDevices, parseDevicectl, parseSimctl } from "../src/devices.js";
+import { parseAdbDevices, parseAvdName, parseDevicectl, parseSimctl } from "../src/devices.js";
 
 describe("parseAdbDevices", () => {
   it("reads usable emulators and physical phones, keeps offline state", () => {
@@ -94,5 +94,17 @@ describe("parseSimctl", () => {
     };
     const devices = parseSimctl(json);
     expect(devices.map((d) => [d.id, d.usable])).toEqual([["A", true], ["B", false]]);
+  });
+});
+
+describe("parseAvdName", () => {
+  it("reads the AVD name before the OK line", () => {
+    expect(parseAvdName("Pixel_10_Pro\nOK\n")).toBe("Pixel_10_Pro");
+    expect(parseAvdName("Pixel_10\r\nOK\r\n")).toBe("Pixel_10");
+  });
+  it("returns null when the console gives no name", () => {
+    expect(parseAvdName("OK\n")).toBeNull();
+    expect(parseAvdName("KO: unknown command\n")).toBeNull();
+    expect(parseAvdName("")).toBeNull();
   });
 });

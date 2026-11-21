@@ -2,7 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { checkFeasibility } from "./feasibility.js";
-import { discoverDevices, executeFlow, resolveAdbBin, resolveMaestroBin } from "./maestro.js";
+import { DEFAULT_JOB_TIMEOUT_MS, discoverDevices, executeFlow, resolveAdbBin, resolveMaestroBin } from "./maestro.js";
 import { buildPlan } from "./planner.js";
 import { shardFlows } from "./shard.js";
 import { runJobs } from "./scheduler.js";
@@ -19,6 +19,12 @@ export interface CliArgs {
   shardIndex: number;
   shardCount: number;
   output: string;
+  /** Time limit per job, in seconds. */
+  jobTimeoutSeconds: number;
+  /** Extra attempts after an infrastructure failure. 0 disables retries. */
+  retries: number;
+  /** Retry flows that failed too (flaky tests). */
+  retryFailed: boolean;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -39,12 +45,19 @@ export function parseArgs(argv: string[]): CliArgs {
   if (!(MODES as readonly string[]).includes(mode)) throw new Error(`Unknown --mode ${mode}. Expected one of: ${MODES.join(", ")}`);
   const shardIndex = Number(get("shard-index") ?? 0);
   const shardCount = Number(get("shard-count") ?? 1);
+  const jobTimeoutSeconds = Number(get("job-timeout") ?? DEFAULT_JOB_TIMEOUT_MS / 1000);
+  const retries = Number(get("retries") ?? 1);
+  if (!Number.isFinite(jobTimeoutSeconds) || jobTimeoutSeconds <= 0) throw new Error("--job-timeout must be a number of seconds > 0");
+  if (!Number.isInteger(retries) || retries < 0) throw new Error("--retries must be an integer >= 0");
   return {
     flows,
     mode,
     shardIndex,
     shardCount,
     output: resolve(get("output") ?? "maestro-deck-results"),
+    jobTimeoutSeconds,
+    retries,
+    retryFailed: argv.includes("--retry-failed"),
   };
 }
 
@@ -104,18 +117,37 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   const plan = buildPlan({ mode: args.mode, flows, devices: usable });
   const artifactsDir = join(args.output, "artifacts");
   mkdirSync(artifactsDir, { recursive: true });
-  const execute = executeFlow({ bin: resolveMaestroBin(env), artifactsDir });
+  const execute = executeFlow({
+    bin: resolveMaestroBin(env),
+    artifactsDir,
+    timeoutMs: args.jobTimeoutSeconds * 1000,
+  });
+
+  const retiredDevices: { id: string; name: string; reason: string }[] = [];
+  // Stop cleanly on Ctrl+C or a CI cancel: kill running flows, mark the rest cancelled.
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
 
   const results = await runJobs({
     jobs: plan.jobs,
     devices: [...plan.pools.android, ...plan.pools.ios],
     parallel: plan.parallel,
     execute,
-    signal: new AbortController().signal,
-    onUpdate: (r) => console.log(`[${r.status}] ${r.flow.split(/[\\/]/).pop()} on ${r.deviceId || "-"}`),
+    signal: controller.signal,
+    maxAttempts: args.retries + 1,
+    retryFailed: args.retryFailed,
+    onUpdate: (r) => console.log(`[${r.status}] ${r.flow.split(/[\\/]/).pop()} on ${r.deviceId || "-"}${r.attempts > 1 ? ` (attempt ${r.attempts})` : ""}`),
+    onDeviceRetired: (d, reason) => {
+      retiredDevices.push({ id: d.id, name: d.name, reason });
+      console.log(`[retired] ${d.id} (${d.name}) after repeated failures: ${reason}`);
+    },
   });
+  process.off("SIGINT", stop);
+  process.off("SIGTERM", stop);
 
-  const summary = summarize(args.mode, { index: args.shardIndex, count: args.shardCount }, results);
+  const summary = summarize(args.mode, { index: args.shardIndex, count: args.shardCount }, results, retiredDevices);
   mkdirSync(args.output, { recursive: true });
   writeFileSync(join(args.output, "summary.json"), JSON.stringify(summary, null, 2));
   const markdown = toMarkdown(summary);
