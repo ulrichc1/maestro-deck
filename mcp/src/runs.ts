@@ -64,6 +64,7 @@ export function summarizeResults(results: JobResult[]): RunRecord["summary"] {
  */
 export class RunManager {
   private runs = new Map<string, { record: RunRecord; controller: AbortController }>();
+  private inflight = new Set<Promise<unknown>>();
   private readonly home: string;
 
   constructor(home: string = process.env.MAESTRO_DECK_MCP_HOME ?? join(homedir(), ".maestro-deck-mcp")) {
@@ -100,7 +101,7 @@ export class RunManager {
     this.persist(record);
 
     const devices = [...plan.pools.android, ...plan.pools.ios];
-    runJobs({
+    const done = runJobs({
       jobs: plan.jobs,
       devices,
       parallel: plan.parallel,
@@ -117,6 +118,8 @@ export class RunManager {
     })
       .then((results) => this.finish(record, results, controller.signal.aborted))
       .catch((err) => this.fail(record, err));
+    this.inflight.add(done);
+    void done.finally(() => this.inflight.delete(done));
 
     return record;
   }
@@ -151,6 +154,16 @@ export class RunManager {
     for (const { record, controller } of this.runs.values()) {
       if (record.state === "running") controller.abort();
     }
+  }
+
+  /**
+   * Cancels every run and waits until their processes are really gone (or `maxMs`),
+   * so closing the MCP server never leaves Maestro or its JVM running.
+   */
+  async stopAll(maxMs = 10_000): Promise<void> {
+    this.cancelAll();
+    const settled = Promise.allSettled([...this.inflight]);
+    await Promise.race([settled, new Promise((r) => setTimeout(r, maxMs))]);
   }
 
   /** Resolves when the run is no longer running, or after `timeoutMs`. */

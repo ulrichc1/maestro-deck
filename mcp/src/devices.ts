@@ -19,6 +19,7 @@ export function parseAdbDevices(output: string): Device[] {
     devices.push({
       id: serial,
       name: (model ?? serial).replace(/_/g, " "),
+      model: model?.toLowerCase(),
       platform: "android",
       state,
       virtual,
@@ -43,7 +44,7 @@ export function parseAvdName(output: string): string | null {
 interface DevicectlEntry {
   identifier: string;
   deviceProperties?: { name?: string };
-  hardwareProperties?: { platform?: string; reality?: string };
+  hardwareProperties?: { platform?: string; reality?: string; productType?: string; marketingName?: string };
   connectionProperties?: { tunnelState?: string; transportType?: string };
 }
 
@@ -65,6 +66,8 @@ export function parseDevicectl(json: { result?: { devices?: DevicectlEntry[] } }
     devices.push({
       id: entry.identifier,
       name: entry.deviceProperties?.name ?? entry.identifier,
+      // The name is chosen by the user ("IphoneU"); the product type is the real model.
+      model: entry.hardwareProperties?.productType ?? entry.hardwareProperties?.marketingName,
       platform: "ios",
       state: !virtual && state === "connected" && !wired ? "connected-network" : state,
       virtual,
@@ -79,6 +82,7 @@ interface SimctlDevice {
   udid: string;
   state: string;
   isAvailable?: boolean;
+  deviceTypeIdentifier?: string;
 }
 
 /**
@@ -95,6 +99,7 @@ export function parseSimctl(json: { devices?: Record<string, SimctlDevice[]> }):
       devices.push({
         id: d.udid,
         name: d.name,
+        model: d.deviceTypeIdentifier?.split(".").pop(),
         platform: "ios",
         state: d.state === "Booted" ? "connected" : d.state.toLowerCase(),
         virtual: true,
@@ -107,5 +112,5 @@ export function parseSimctl(json: { devices?: Record<string, SimctlDevice[]> }):
 
 /** Model key used to decide "same model" vs "different models". */
 export function modelOf(device: Device): string {
-  return device.name.replace(/[_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  return (device.model ?? device.name).replace(/[_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 }

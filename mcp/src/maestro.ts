@@ -56,7 +56,10 @@ export async function discoverDevices(adbBin: string): Promise<Device[]> {
           try {
             const { stdout: avd } = await execFileAsync(adbBin, ["-s", d.id, "emu", "avd", "name"], { timeout: 10_000 });
             const name = parseAvdName(avd);
-            if (name) d.name = name.replace(/_/g, " ");
+            if (name) {
+              d.name = name.replace(/_/g, " ");
+              d.model = name; // emulators share one system model; the AVD tells them apart
+            }
           } catch {
             // Keep the model name when the emulator console does not answer.
           }

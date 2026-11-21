@@ -9,7 +9,7 @@ import { RunManager } from "../src/runs.js";
 
 describe("MCP server", () => {
   it("exposes the lot 3 tools over the MCP protocol", async () => {
-    const server = createServer({ bin: "maestro-does-not-exist", adbBin: "adb-does-not-exist", runs: new RunManager(mkdtempSync(join(tmpdir(), "home-"))) });
+    const server = createServer({ bin: "maestro-does-not-exist", adbBin: "adb-does-not-exist", runs: new RunManager(mkdtempSync(join(tmpdir(), "home-"))), cloud: { token: undefined } });
     const [clientT, serverT] = InMemoryTransport.createLinkedPair();
     await server.connect(serverT);
     const client = new Client({ name: "test", version: "0.0.0" });
@@ -18,14 +18,21 @@ describe("MCP server", () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
       "cancel_run",
+      "check_flow_syntax",
       "check_parallel_feasibility",
+      "cloud_get_jobs",
+      "cloud_run_flows",
       "doctor",
+      "generate_github_workflow",
+      "get_run_report",
       "get_run_results",
       "get_run_status",
       "list_devices",
       "list_flows",
       "list_runs",
+      "read_flow",
       "run_flows",
+      "wait_for_run",
     ]);
     const feasibility = await client.callTool({ name: "check_parallel_feasibility", arguments: { mode: "ios_android" } });
     expect(feasibility.isError).not.toBe(true);

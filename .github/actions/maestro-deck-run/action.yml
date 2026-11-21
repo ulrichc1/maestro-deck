@@ -24,6 +24,14 @@ inputs:
     description: Directory for summary.json, summary.md and per-job artifacts.
     required: false
     default: maestro-deck-results
+  job-timeout:
+    description: Seconds before a single flow is stopped and reported as timeout.
+    required: false
+    default: "600"
+  retries:
+    description: Extra attempts after an infrastructure failure (device lost, driver crash).
+    required: false
+    default: "1"
   maestro-version:
     description: Maestro CLI version to install.
     required: false
@@ -72,6 +80,8 @@ runs:
         INPUT_SHARD_INDEX: ${{ inputs.shard-index }}
         INPUT_SHARD_COUNT: ${{ inputs.shard-count }}
         INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_JOB_TIMEOUT: ${{ inputs.job-timeout }}
+        INPUT_RETRIES: ${{ inputs.retries }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         export PATH="$HOME/.maestro/bin:$PATH"
@@ -81,6 +91,8 @@ runs:
           --mode "$INPUT_MODE" \
           --shard-index "$INPUT_SHARD_INDEX" \
           --shard-count "$INPUT_SHARD_COUNT" \
+          --job-timeout "$INPUT_JOB_TIMEOUT" \
+          --retries "$INPUT_RETRIES" \
           --output "$INPUT_OUTPUT"
         code=$?
         set -e

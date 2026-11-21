@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAdbDevices, parseAvdName, parseDevicectl, parseSimctl } from "../src/devices.js";
+import { modelOf, parseAdbDevices, parseAvdName, parseDevicectl, parseSimctl } from "../src/devices.js";
 
 describe("parseAdbDevices", () => {
   it("reads usable emulators and physical phones, keeps offline state", () => {
@@ -11,7 +11,7 @@ describe("parseAdbDevices", () => {
     ].join("\n");
     const devices = parseAdbDevices(out);
     expect(devices).toEqual([
-      { id: "emulator-5554", name: "Pixel 10", platform: "android", state: "device", virtual: true, usable: true },
+      { id: "emulator-5554", name: "Pixel 10", model: "pixel_10", platform: "android", state: "device", virtual: true, usable: true },
       { id: "R5CT20ABCDE", name: "R5CT20ABCDE", platform: "android", state: "unauthorized", virtual: false, usable: false },
     ]);
   });
@@ -106,5 +106,44 @@ describe("parseAvdName", () => {
     expect(parseAvdName("OK\n")).toBeNull();
     expect(parseAvdName("KO: unknown command\n")).toBeNull();
     expect(parseAvdName("")).toBeNull();
+  });
+});
+
+describe("model identity", () => {
+  it("uses the iPhone product type, so a custom-named phone matches an identical simulator", () => {
+    const json = {
+      result: {
+        devices: [
+          {
+            identifier: "PHYS", deviceProperties: { name: "IphoneU" },
+            hardwareProperties: { platform: "iOS", reality: "physical", productType: "iPhone16,2", marketingName: "iPhone 15 Pro Max" },
+            connectionProperties: { tunnelState: "connected", transportType: "wired" },
+          },
+          {
+            identifier: "SIM", deviceProperties: { name: "Mate 15 Pro Max" },
+            hardwareProperties: { platform: "iOS", reality: "simulated", productType: "iPhone16,2", marketingName: "iPhone 15 Pro Max" },
+            connectionProperties: { tunnelState: "connected" },
+          },
+        ],
+      },
+    };
+    const [phys, sim] = parseDevicectl(json);
+    expect(modelOf(phys)).toBe(modelOf(sim));
+  });
+
+  it("falls back to the name when no model is known, and ignores case and separators", () => {
+    const d = (name: string, model?: string) => ({ id: name, name, model, platform: "android" as const, state: "device", virtual: true, usable: true });
+    expect(modelOf(d("Pixel_10"))).toBe(modelOf(d("pixel 10")));
+    expect(modelOf(d("Pixel 10", "Pixel_10_Pro"))).toBe("pixel 10 pro");
+  });
+
+  it("reads the simulator device type from simctl", () => {
+    const devices = parseSimctl({
+      devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-4": [
+        { name: "iPhone 17 Pro", udid: "A", state: "Booted", isAvailable: true, deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro" },
+        { name: "My clone", udid: "B", state: "Booted", isAvailable: true, deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro" },
+      ] },
+    });
+    expect(modelOf(devices[0])).toBe(modelOf(devices[1]));
   });
 });

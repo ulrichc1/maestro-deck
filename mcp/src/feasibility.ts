@@ -81,11 +81,12 @@ function groupByModel(devices: Device[]): Device[][] {
 }
 
 function summarize(devices: Device[]): FeasibilityReport["devicesFound"] {
-  const counts = new Map<string, { platform: Platform; model: string; count: number }>();
+  const counts = new Map<string, { platform: Platform; model: string; count: number; names: string[] }>();
   for (const d of devices) {
     const model = modelOf(d);
     const key = `${d.platform}|${model}`;
-    const entry = counts.get(key) ?? { platform: d.platform, model, count: 0 };
+    const entry = counts.get(key) ?? { platform: d.platform, model, count: 0, names: [] as string[] };
+    entry.names.push(d.name);
     entry.count += 1;
     counts.set(key, entry);
   }

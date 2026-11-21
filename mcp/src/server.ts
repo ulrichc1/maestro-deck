@@ -1,11 +1,24 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import {
+  CloudError,
+  planCloudJobs,
+  submitCloudJob,
+  waitForCloudJobs,
+  getCloudJobStatus,
+  type CloudClientConfig,
+} from "./cloud.js";
 import { checkFeasibility } from "./feasibility.js";
-import { discoverDevices, executeFlow, maestroVersion, resolveAdbBin, resolveMaestroBin } from "./maestro.js";
+import { DEFAULT_JOB_TIMEOUT_MS, discoverDevices, executeFlow, maestroVersion, resolveAdbBin, resolveMaestroBin } from "./maestro.js";
 import { RunManager, type RunRecord } from "./runs.js";
 import type { Mode } from "./types.js";
+import { generateWorkflow } from "./workflow.js";
+
+const execFileAsync = promisify(execFile);
 
 export const MODES = [
   "sequential",
@@ -20,6 +33,7 @@ export interface ServerDeps {
   bin: string;
   adbBin: string;
   runs: RunManager;
+  cloud: CloudClientConfig;
 }
 
 const text = (value: unknown) => ({
@@ -41,6 +55,8 @@ export function resolveFlows(flows: string[], cwd: string): { ok: string[] } | {
   return { ok };
 }
 
+const FINISHED_JOB = new Set(["passed", "failed", "error", "timeout", "cancelled"]);
+
 function summarizeRun(run: RunRecord) {
   return {
     id: run.id,
@@ -49,21 +65,41 @@ function summarizeRun(run: RunRecord) {
     createdAt: run.createdAt,
     finishedAt: run.finishedAt,
     summary: run.summary,
-    progress: run.results.filter((r) => ["passed", "failed", "error", "cancelled"].includes(r.status)).length,
+    progress: run.results.filter((r) => FINISHED_JOB.has(r.status)).length,
+    retiredDevices: run.retiredDevices,
   };
 }
 
+function resultsPayload(run: RunRecord) {
+  return {
+    ...summarizeRun(run),
+    byPlatform: {
+      android: run.results.filter((r) => r.platform === "android"),
+      ios: run.results.filter((r) => r.platform === "ios"),
+    },
+  };
+}
+
+const MAX_REPORT_CHARS = 20_000;
+
 export function createServer(deps: ServerDeps): McpServer {
-  const server = new McpServer({ name: "maestro-deck", version: "0.1.0" });
+  const server = new McpServer({ name: "maestro-deck", version: "0.2.0" });
 
   server.registerTool(
     "doctor",
-    { description: "Check the Maestro CLI, its version, and the devices it can see." },
+    { description: "Check the Maestro CLI, its version, adb, the usable devices, and whether a cloud token is configured." },
     async () => {
       try {
         const version = await maestroVersion(deps.bin);
         const devices = await discoverDevices(deps.adbBin);
-        return text({ maestroBin: deps.bin, maestroVersion: version, adbBin: deps.adbBin, devices: devices.length, usable: devices.filter((d) => d.usable).length });
+        return text({
+          maestroBin: deps.bin,
+          maestroVersion: version,
+          adbBin: deps.adbBin,
+          devices: devices.length,
+          usable: devices.filter((d) => d.usable).length,
+          cloudTokenConfigured: Boolean(deps.cloud.token),
+        });
       } catch (err) {
         return fail(`Maestro CLI not usable at "${deps.bin}": ${(err as Error).message}. Set MAESTRO_BIN to its path.`);
       }
@@ -72,10 +108,11 @@ export function createServer(deps: ServerDeps): McpServer {
 
   server.registerTool(
     "list_devices",
-    { description: "List local Android and iOS devices and simulators that Maestro can use." },
-    async () => {
-      return text(await discoverDevices(deps.adbBin));
+    {
+      description:
+        "List the Android devices/emulators (adb) and iOS simulators/phones (devicectl) with their state. Only devices with usable=true can run flows.",
     },
+    async () => text(await discoverDevices(deps.adbBin)),
   );
 
   server.registerTool(
@@ -85,9 +122,7 @@ export function createServer(deps: ServerDeps): McpServer {
         "Tell whether a parallel mode can run on the usable devices connected now. Modes: same-model or different-model devices on one platform, or iOS and Android together.",
       inputSchema: { mode: z.enum(MODES) },
     },
-    async ({ mode }) => {
-      return text(checkFeasibility(mode, await discoverDevices(deps.adbBin)));
-    },
+    async ({ mode }) => text(checkFeasibility(mode, await discoverDevices(deps.adbBin))),
   );
 
   server.registerTool(
@@ -101,8 +136,46 @@ export function createServer(deps: ServerDeps): McpServer {
       if (!existsSync(dir)) return fail(`Directory not found: ${dir}`);
       const files = readdirSync(dir)
         .filter((f) => [".yaml", ".yml"].includes(extname(f)))
+        .sort()
         .map((f) => join(dir, f));
       return text(files);
+    },
+  );
+
+  server.registerTool(
+    "read_flow",
+    {
+      description: "Read the content of a Maestro YAML flow file.",
+      inputSchema: { path: z.string() },
+    },
+    async ({ path }) => {
+      const resolved = resolveFlows([path], process.cwd());
+      if ("error" in resolved) return fail(resolved.error);
+      return text(readFileSync(resolved.ok[0], "utf8"));
+    },
+  );
+
+  server.registerTool(
+    "check_flow_syntax",
+    {
+      description: "Validate the syntax of Maestro flows without running them (maestro check-syntax). No device needed.",
+      inputSchema: { flows: z.array(z.string()).min(1) },
+    },
+    async ({ flows }) => {
+      const resolved = resolveFlows(flows, process.cwd());
+      if ("error" in resolved) return fail(resolved.error);
+      const results = await Promise.all(
+        resolved.ok.map(async (file) => {
+          try {
+            await execFileAsync(deps.bin, ["check-syntax", file], { timeout: 60_000 });
+            return { flow: file, valid: true as const };
+          } catch (err) {
+            const e = err as { stderr?: string; stdout?: string; message: string };
+            return { flow: file, valid: false as const, message: (e.stderr || e.stdout || e.message).trim().slice(0, 1000) };
+          }
+        }),
+      );
+      return text({ allValid: results.every((r) => r.valid), results });
     },
   );
 
@@ -110,13 +183,17 @@ export function createServer(deps: ServerDeps): McpServer {
     "run_flows",
     {
       description:
-        "Start Maestro flows on devices. Returns a runId immediately; poll get_run_status and get_run_results. Mode 'sequential' runs one device; the other modes run in parallel from a queue.",
+        "Start Maestro flows on local devices. Returns a runId at once unless waitSeconds is set. Mode 'sequential' uses one device; the other modes run in parallel from a queue, retry infrastructure failures on another device, and retire a device that keeps failing. Each job has a time limit.",
       inputSchema: {
         flows: z.array(z.string()).min(1).describe("Flow files (YAML)"),
         mode: z.enum(MODES).default("sequential"),
+        timeoutSeconds: z.number().int().min(1).max(7200).default(DEFAULT_JOB_TIMEOUT_MS / 1000).describe("Kill a job that runs longer than this"),
+        retries: z.number().int().min(0).max(5).default(1).describe("Extra attempts after an infrastructure failure"),
+        retryFailed: z.boolean().default(false).describe("Also retry flows that failed their assertions"),
+        waitSeconds: z.number().int().min(0).max(1800).default(0).describe("Wait up to this long for the run to finish before answering"),
       },
     },
-    async ({ flows, mode }) => {
+    async ({ flows, mode, timeoutSeconds, retries, retryFailed, waitSeconds }) => {
       const resolved = resolveFlows(flows, process.cwd());
       if ("error" in resolved) return fail(resolved.error);
       try {
@@ -125,8 +202,14 @@ export function createServer(deps: ServerDeps): McpServer {
           mode,
           flows: resolved.ok,
           devices,
-          executeFor: (artifactsDir) => executeFlow({ bin: deps.bin, artifactsDir }),
+          maxAttempts: retries + 1,
+          retryFailed,
+          executeFor: (artifactsDir) => executeFlow({ bin: deps.bin, artifactsDir, timeoutMs: timeoutSeconds * 1000 }),
         });
+        if (waitSeconds > 0) {
+          const finished = await deps.runs.waitFor(run.id, waitSeconds * 1000);
+          return text(resultsPayload(finished ?? run));
+        }
         return text({ runId: run.id, state: run.state, jobs: run.summary.total, artifactsDir: run.artifactsDir });
       } catch (err) {
         return fail((err as Error).message);
@@ -135,11 +218,20 @@ export function createServer(deps: ServerDeps): McpServer {
   );
 
   server.registerTool(
-    "get_run_status",
+    "wait_for_run",
     {
-      description: "Current state and progress of a run.",
-      inputSchema: { runId: z.string() },
+      description: "Wait until a run finishes, or until waitSeconds elapses, then return its results.",
+      inputSchema: { runId: z.string(), waitSeconds: z.number().int().min(1).max(1800).default(60) },
     },
+    async ({ runId, waitSeconds }) => {
+      const run = await deps.runs.waitFor(runId, waitSeconds * 1000);
+      return run ? text(resultsPayload(run)) : fail(`Unknown run: ${runId}`);
+    },
+  );
+
+  server.registerTool(
+    "get_run_status",
+    { description: "Current state and progress of a run.", inputSchema: { runId: z.string() } },
     async ({ runId }) => {
       const run = deps.runs.get(runId);
       return run ? text(summarizeRun(run)) : fail(`Unknown run: ${runId}`);
@@ -150,37 +242,162 @@ export function createServer(deps: ServerDeps): McpServer {
     "get_run_results",
     {
       description:
-        "Per-job results of a run: status, device, platform, duration, JUnit report path. Results are grouped by platform.",
+        "Per-job results of a run: status, device, platform, attempts, devices tried, duration, report path. Grouped by platform.",
       inputSchema: { runId: z.string() },
     },
     async ({ runId }) => {
       const run = deps.runs.get(runId);
+      return run ? text(resultsPayload(run)) : fail(`Unknown run: ${runId}`);
+    },
+  );
+
+  server.registerTool(
+    "get_run_report",
+    {
+      description: "Read the JUnit report of one job (or every job) of a run, and list its artifact files (screenshots, logs).",
+      inputSchema: { runId: z.string(), jobId: z.string().optional() },
+    },
+    async ({ runId, jobId }) => {
+      const run = deps.runs.get(runId);
       if (!run) return fail(`Unknown run: ${runId}`);
-      const byPlatform = { android: run.results.filter((r) => r.platform === "android"), ios: run.results.filter((r) => r.platform === "ios") };
-      return text({ ...summarizeRun(run), byPlatform });
+      const jobs = run.results.filter((r) => (jobId ? r.jobId === jobId : true));
+      if (jobs.length === 0) return fail(jobId ? `Unknown job: ${jobId}` : "This run has no job yet.");
+      return text(
+        jobs.map((j) => {
+          const dir = join(run.artifactsDir, j.jobId);
+          const files = existsSync(dir) ? readdirSync(dir).slice(0, 50) : [];
+          let junit: string | null = null;
+          if (j.reportPath && existsSync(j.reportPath)) {
+            junit = readFileSync(j.reportPath, "utf8").slice(0, MAX_REPORT_CHARS);
+          }
+          return { jobId: j.jobId, flow: j.flow, status: j.status, deviceId: j.deviceId, artifactsDir: dir, files, junit };
+        }),
+      );
     },
   );
 
   server.registerTool(
     "cancel_run",
     {
-      description: "Stop a running run: running jobs are killed, queued jobs are marked cancelled.",
+      description: "Stop a running run: running jobs are stopped (SIGTERM then SIGKILL on the whole process group), queued jobs are marked cancelled.",
       inputSchema: { runId: z.string() },
     },
-    async ({ runId }) => {
-      return deps.runs.cancel(runId) ? text({ cancelled: true, runId }) : fail(`Run ${runId} is not running.`);
-    },
+    async ({ runId }) => (deps.runs.cancel(runId) ? text({ cancelled: true, runId }) : fail(`Run ${runId} is not running.`)),
   );
 
   server.registerTool(
     "list_runs",
-    { description: "All runs started by this server process, most recent first." },
-    async () => text(deps.runs.list().map(summarizeRun).reverse()),
+    { description: "Runs started by this server and by earlier sessions, most recent first. A run found mid-flight after a restart is 'interrupted'." },
+    async () => text(deps.runs.list().map(summarizeRun)),
+  );
+
+  server.registerTool(
+    "generate_github_workflow",
+    {
+      description:
+        "Generate a GitHub Actions workflow that runs flows in parallel on a matrix of emulators (Android) or simulators (iOS), using the Maestro Deck CLI or composite action. Returns YAML text; it does not write any file.",
+      inputSchema: {
+        flows: z.string().describe("Flow file or directory in the repository, e.g. flows/"),
+        platform: z.enum(["android", "ios"]),
+        shards: z.number().int().min(1).max(20).default(2).describe("Matrix jobs, each with its own device"),
+        jobTimeoutSeconds: z.number().int().min(1).max(7200).default(600),
+        retries: z.number().int().min(0).max(5).default(1),
+        workflowName: z.string().optional(),
+      },
+    },
+    async (opts) => {
+      try {
+        return text(generateWorkflow(opts));
+      } catch (err) {
+        return fail((err as Error).message);
+      }
+    },
+  );
+
+  server.registerTool(
+    "cloud_run_flows",
+    {
+      description:
+        "Run flows on the Maestro Deck cloud. EVERY accepted job spends one run of the account and cannot be cancelled. Without confirmSpend=true this only returns the plan and the number of runs it would spend. Needs MAESTRO_DECK_CLOUD_TOKEN. Modes: sequential (one job), parallel (one job per flow), ios_android (an iOS and an Android job per flow).",
+      inputSchema: {
+        flows: z.array(z.string()).min(1),
+        mode: z.enum(["sequential", "parallel", "ios_android"]).default("sequential"),
+        platform: z.enum(["android", "android_physical", "ios"]).default("android"),
+        appPath: z.string().optional().describe(".apk to install on Android"),
+        iosAppPath: z.string().optional().describe("Zipped .app simulator build for iOS"),
+        confirmSpend: z.boolean().default(false).describe("Must be true to actually submit and spend runs"),
+        waitSeconds: z.number().int().min(0).max(1800).default(0),
+      },
+    },
+    async ({ flows, mode, platform, appPath, iosAppPath, confirmSpend, waitSeconds }) => {
+      const resolved = resolveFlows(flows, process.cwd());
+      if ("error" in resolved) return fail(resolved.error);
+      for (const p of [appPath, iosAppPath]) {
+        if (p && !existsSync(p)) return fail(`File not found: ${p}`);
+      }
+      let plan;
+      try {
+        plan = planCloudJobs(mode, resolved.ok, platform, { apk: appPath, iosZip: iosAppPath });
+      } catch (err) {
+        return fail((err as Error).message);
+      }
+      const summary = plan.map((j) => ({ platform: j.platform, app: j.appPath, flows: j.yamlPaths }));
+      if (!confirmSpend) {
+        return text({ submitted: false, wouldSpendRuns: plan.length, plan: summary, note: "Call again with confirmSpend=true to submit." });
+      }
+      if (!deps.cloud.token) return fail("No cloud token. Set MAESTRO_DECK_CLOUD_TOKEN, or run on the desktop app.");
+      const jobs: { jobId?: string; platform: string; flows: string[]; error?: string }[] = [];
+      let stop = false;
+      for (const job of plan) {
+        if (stop) {
+          jobs.push({ platform: job.platform, flows: job.yamlPaths, error: "Not submitted: an earlier job was refused." });
+          continue;
+        }
+        try {
+          const { jobId } = await submitCloudJob(deps.cloud, job);
+          jobs.push({ jobId, platform: job.platform, flows: job.yamlPaths });
+        } catch (err) {
+          jobs.push({ platform: job.platform, flows: job.yamlPaths, error: (err as Error).message });
+          // Quota, auth and disabled-jobs errors apply to every later job as well.
+          if (err instanceof CloudError && err.code !== "UPLOAD_FAILED" && err.code !== "REQUEST_FAILED") stop = true;
+        }
+      }
+      const ids = jobs.flatMap((j) => (j.jobId ? [j.jobId] : []));
+      const statuses = waitSeconds > 0 && ids.length > 0 ? await waitForCloudJobs(deps.cloud, ids, waitSeconds * 1000) : undefined;
+      return text({ submitted: true, runsSpent: ids.length, jobs, statuses });
+    },
+  );
+
+  server.registerTool(
+    "cloud_get_jobs",
+    {
+      description: "Get the status of cloud jobs by id, optionally waiting for them to finish. Needs MAESTRO_DECK_CLOUD_TOKEN.",
+      inputSchema: {
+        jobIds: z.array(z.string()).min(1).max(50),
+        waitSeconds: z.number().int().min(0).max(1800).default(0),
+      },
+    },
+    async ({ jobIds, waitSeconds }) => {
+      try {
+        const statuses =
+          waitSeconds > 0
+            ? await waitForCloudJobs(deps.cloud, jobIds, waitSeconds * 1000)
+            : await Promise.all(jobIds.map((id) => getCloudJobStatus(deps.cloud, id)));
+        return text(statuses);
+      } catch (err) {
+        return fail((err as Error).message);
+      }
+    },
   );
 
   return server;
 }
 
-export function defaultDeps(): ServerDeps {
-  return { bin: resolveMaestroBin(), adbBin: resolveAdbBin(), runs: new RunManager() };
+export function defaultDeps(env: NodeJS.ProcessEnv = process.env): ServerDeps {
+  return {
+    bin: resolveMaestroBin(env),
+    adbBin: resolveAdbBin(env),
+    runs: new RunManager(),
+    cloud: { token: env.MAESTRO_DECK_CLOUD_TOKEN },
+  };
 }

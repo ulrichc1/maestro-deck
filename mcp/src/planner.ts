@@ -1,3 +1,4 @@
+import { modelOf } from "./devices.js";
 import type { Device, Job, Mode, Platform } from "./types.js";
 
 export interface PlanInput {
@@ -76,7 +77,7 @@ function job(mode: Mode, index: number, flow: string, platform: Platform): Job {
 export function largestSameModelGroup(devices: Device[]): Device[] {
   const groups = new Map<string, Device[]>();
   for (const d of devices) {
-    const key = d.name.replace(/[_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    const key = modelOf(d);
     groups.set(key, [...(groups.get(key) ?? []), d]);
   }
   let best: Device[] = [];

@@ -14,6 +14,8 @@ boots one device and takes its shard of the flows.
 | `shard-index` | no | `0` | 0-based index of this job in the matrix |
 | `shard-count` | no | `1` | number of matrix jobs sharing the flows |
 | `output` | no | `maestro-deck-results` | folder for `summary.json`, `summary.md`, per-job artifacts |
+| `job-timeout` | no | `600` | seconds before one flow is stopped and reported as `timeout` |
+| `retries` | no | `1` | extra attempts after an infrastructure failure (lost device, driver crash) |
 | `maestro-version` | no | `2.10.0` | Maestro CLI version |
 
 ## Outputs

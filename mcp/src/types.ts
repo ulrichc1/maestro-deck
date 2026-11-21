@@ -7,6 +7,12 @@ export interface Device {
   platform: Platform;
   /** Raw state from the source tool, e.g. "device", "connected", "unavailable". */
   state: string;
+  /**
+   * Hardware model used to tell "same model" from "different models": the product type of
+   * an iPhone (iPhone16,2), the AVD name of an emulator, the adb model of a phone.
+   * Falls back to the display name when unknown.
+   */
+  model?: string;
   /** Emulator or simulator rather than a physical phone. */
   virtual: boolean;
   /** True when a job can be sent to it right now. */
@@ -63,5 +69,5 @@ export interface FeasibilityReport {
   mode: Mode;
   feasible: Feasibility;
   reason: string;
-  devicesFound: { platform: Platform; model: string; count: number }[];
+  devicesFound: { platform: Platform; model: string; count: number; names: string[] }[];
 }
