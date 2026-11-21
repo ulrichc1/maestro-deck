@@ -20,6 +20,8 @@ import type { CatalogEntry } from "@/lib/deviceCatalog";
 import { ipc } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useDevicePickerStore } from "@/stores/devicePickerStore";
+import { useCloudTargetStore } from "@/stores/cloudTargetStore";
+import type { CloudParallelMode } from "@/lib/cloudParallel";
 import { useDeviceStore } from "@/stores/deviceStore";
 import { toast } from "@/stores/toastStore";
 import type { HealthReport } from "@/types";
@@ -115,6 +117,7 @@ export function DeviceSelector() {
           ) : (
             <EmptyCard onBrowse={() => openPicker(true)} />
           )}
+          {target ? <CloudModeSwitch /> : null}
           {target && live ? (
             <p className="text-[10px] leading-relaxed text-muted-foreground">
               {live.name} stays connected for the inspector; Run goes to the cloud.
@@ -338,5 +341,38 @@ function QuickRow({ entry: e }: { entry: CatalogEntry }) {
         <PixelChevron className="shrink-0 text-muted-foreground opacity-0 transition-[opacity,transform] duration-150 [transition-timing-function:steps(2,end)] group-hover:translate-x-[3px] group-hover:opacity-100" />
       </button>
     </li>
+  );
+}
+
+const CLOUD_MODES: { id: CloudParallelMode; label: string; hint: string }[] = [
+  { id: "sequential", label: "One job", hint: "All flows in one cloud job" },
+  { id: "parallel", label: "Per flow", hint: "One cloud job per flow, all started together" },
+  { id: "ios_android", label: "iOS + Android", hint: "Each flow on an iOS job and an Android job" },
+];
+
+/** How "Run all" splits the folder's flows across cloud jobs. */
+function CloudModeSwitch() {
+  const mode = useCloudTargetStore((s) => s.parallelMode);
+  const setMode = useCloudTargetStore((s) => s.setParallelMode);
+  return (
+    <div role="radiogroup" aria-label="Cloud run mode" className="flex border border-brand/20">
+      {CLOUD_MODES.map((m) => (
+        <button
+          key={m.id}
+          type="button"
+          role="radio"
+          aria-checked={mode === m.id}
+          title={m.hint}
+          onClick={() => setMode(m.id)}
+          className={`flex-1 px-2 py-1.5 text-[10px] font-medium transition-colors ${
+            mode === m.id
+              ? "bg-brand text-brand-foreground"
+              : "text-muted-foreground hover:bg-accent hover:text-foreground"
+          }`}
+        >
+          {m.label}
+        </button>
+      ))}
+    </div>
   );
 }

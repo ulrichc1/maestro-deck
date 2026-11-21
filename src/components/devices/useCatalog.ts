@@ -8,6 +8,7 @@ import { cloudAppPath } from "@/lib/cloudRunner";
 import { buildCatalog, type CatalogEntry } from "@/lib/deviceCatalog";
 import { useCloudAuthStore } from "@/stores/cloudAuthStore";
 import { useCloudTargetStore } from "@/stores/cloudTargetStore";
+import { toast } from "@/stores/toastStore";
 import { useDeviceStore } from "@/stores/deviceStore";
 import { useFarmStore } from "@/stores/farmStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -96,6 +97,13 @@ export async function selectEntry(e: CatalogEntry): Promise<boolean> {
       if (e.state === "target") {
         target.clear();
         return true;
+      }
+      if (useCloudAuthStore.getState().user === null) {
+        toast.error(
+          "Sign in first",
+          "Sign in to Maestro Deck to run on the cloud. You can still choose the build now.",
+        );
+        return false;
       }
       if (!cloudAppPath(e.cloud) && !(await pickCloudArtifact(e.cloud))) return false;
       target.select(e.cloud);

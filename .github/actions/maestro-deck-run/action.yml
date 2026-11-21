@@ -1,0 +1,118 @@
+name: Maestro Deck parallel run
+description: >
+  Runs Maestro flows on the devices already booted in this job, sequentially or
+  in parallel, and publishes a per-flow summary. Use a matrix to spread flows
+  across several jobs (one device per job).
+
+inputs:
+  flows:
+    description: YAML flow files or directories, comma-separated.
+    required: true
+  mode:
+    description: "sequential, android_same_model, android_different_models, ios_same_model, ios_different_models or ios_android."
+    required: false
+    default: sequential
+  shard-index:
+    description: 0-based index of this job among the matrix jobs.
+    required: false
+    default: "0"
+  shard-count:
+    description: Total number of matrix jobs sharing the flows.
+    required: false
+    default: "1"
+  output:
+    description: Directory for summary.json, summary.md and per-job artifacts.
+    required: false
+    default: maestro-deck-results
+  job-timeout:
+    description: Seconds before a single flow is stopped and reported as timeout.
+    required: false
+    default: "600"
+  retries:
+    description: Extra attempts after an infrastructure failure (device lost, driver crash).
+    required: false
+    default: "1"
+  maestro-version:
+    description: Maestro CLI version to install.
+    required: false
+    default: 2.10.0
+
+outputs:
+  success:
+    description: "true when every flow passed."
+    value: ${{ steps.run.outputs.success }}
+  exit-code:
+    description: "CLI exit code: 0 all passed, 1 a flow failed, 2 the run could not start."
+    value: ${{ steps.run.outputs.exit-code }}
+  summary-path:
+    description: Path of summary.json.
+    value: ${{ steps.run.outputs.summary-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
+    - name: Install Maestro CLI
+      shell: bash
+      env:
+        MAESTRO_VERSION: ${{ inputs.maestro-version }}
+      run: |
+        curl -fsSL "https://get.maestro.mobile.dev" | bash
+        echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+    - name: Build maestro-deck-run
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../../mcp
+      run: |
+        npm ci
+        npm run build
+
+    - name: Run flows
+      id: run
+      shell: bash
+      env:
+        INPUT_FLOWS: ${{ inputs.flows }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_SHARD_INDEX: ${{ inputs.shard-index }}
+        INPUT_SHARD_COUNT: ${{ inputs.shard-count }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_JOB_TIMEOUT: ${{ inputs.job-timeout }}
+        INPUT_RETRIES: ${{ inputs.retries }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        export PATH="$HOME/.maestro/bin:$PATH"
+        set +e
+        node "$ACTION_PATH/../../../mcp/dist/cli.js" \
+          --flows "$INPUT_FLOWS" \
+          --mode "$INPUT_MODE" \
+          --shard-index "$INPUT_SHARD_INDEX" \
+          --shard-count "$INPUT_SHARD_COUNT" \
+          --job-timeout "$INPUT_JOB_TIMEOUT" \
+          --retries "$INPUT_RETRIES" \
+          --output "$INPUT_OUTPUT"
+        code=$?
+        set -e
+        echo "summary-path=$INPUT_OUTPUT/summary.json" >> "$GITHUB_OUTPUT"
+        if [ "$code" -eq 0 ]; then echo "success=true" >> "$GITHUB_OUTPUT"; else echo "success=false" >> "$GITHUB_OUTPUT"; fi
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: maestro-deck-${{ inputs.mode }}-${{ inputs.shard-index }}
+        path: ${{ inputs.output }}
+        if-no-files-found: ignore
+
+    - name: Fail when a flow failed
+      if: steps.run.outputs.exit-code != '0'
+      shell: bash
+      env:
+        EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+      run: |
+        echo "Maestro Deck run failed with exit code $EXIT_CODE."
+        exit "$EXIT_CODE"

@@ -1,0 +1,62 @@
+# Manual test of the Maestro Deck composite action. Runs only when dispatched by hand.
+name: Maestro Deck action test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-simulator:
+    name: iOS simulator (expected to pass)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot an iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print([x['udid'] for r,v in d.items() if 'iOS' in r for x in v if x['name'].startswith('iPhone')][-1])")
+          echo "UDID=$UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+      - uses: ./.github/actions/maestro-deck-run
+        with:
+          flows: .github/actions/maestro-deck-run/examples/flows/launch-settings.yaml
+          mode: sequential
+          output: results-ios
+
+  ios-expected-failure:
+    name: iOS simulator (expected to report a failed flow)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot an iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print([x['udid'] for r,v in d.items() if 'iOS' in r for x in v if x['name'].startswith('iPhone')][-1])")
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+      - id: run
+        uses: ./.github/actions/maestro-deck-run
+        continue-on-error: true
+        with:
+          flows: .github/actions/maestro-deck-run/examples/flows/expected-failure.yaml
+          output: results-ios-fail
+      - name: Check the action reported failure
+        run: |
+          test "${{ steps.run.outputs.exit-code }}" = "1" && echo "OK: failed flow reported with exit 1"
+
+  no-device-infra:
+    name: No device on hosted runner (expected infra error, exit 2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: run
+        uses: ./.github/actions/maestro-deck-run
+        continue-on-error: true
+        with:
+          flows: .github/actions/maestro-deck-run/examples/flows/launch-settings.yaml
+          mode: android_same_model
+          output: results-none
+      - name: Check the infra exit code
+        run: |
+          test "${{ steps.run.outputs.exit-code }}" = "2" && echo "OK: infra error reported"

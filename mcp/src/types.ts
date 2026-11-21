@@ -1,0 +1,73 @@
+export type Platform = "android" | "ios";
+
+export interface Device {
+  /** adb serial (Android) or UDID (iOS). */
+  id: string;
+  name: string;
+  platform: Platform;
+  /** Raw state from the source tool, e.g. "device", "connected", "unavailable". */
+  state: string;
+  /**
+   * Hardware model used to tell "same model" from "different models": the product type of
+   * an iPhone (iPhone16,2), the AVD name of an emulator, the adb model of a phone.
+   * Falls back to the display name when unknown.
+   */
+  model?: string;
+  /** Emulator or simulator rather than a physical phone. */
+  virtual: boolean;
+  /** True when a job can be sent to it right now. */
+  usable: boolean;
+}
+
+/** Execution modes of lot 3. `sequential` is the default and runs one device. */
+export type Mode =
+  | "sequential"
+  | "android_same_model"
+  | "android_different_models"
+  | "ios_same_model"
+  | "ios_different_models"
+  | "ios_android";
+
+export interface Job {
+  id: string;
+  flow: string;
+  platform: Platform;
+  /** Device the job is pinned to; set by the planner. */
+  deviceId: string;
+}
+
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "passed"
+  | "failed"
+  /** The device or Maestro could not run the flow (infrastructure), not a test failure. */
+  | "error"
+  /** The job exceeded its time limit and was killed. */
+  | "timeout"
+  | "cancelled";
+
+export interface JobResult {
+  jobId: string;
+  flow: string;
+  platform: Platform;
+  deviceId: string;
+  status: JobStatus;
+  durationMs: number | null;
+  exitCode: number | null;
+  reportPath: string | null;
+  errorTail: string | null;
+  /** How many times the job was started (1 when it was never retried). */
+  attempts: number;
+  /** Every device the job ran on, in order; more than one entry means it was retried elsewhere. */
+  devicesTried: string[];
+}
+
+export type Feasibility = "yes" | "with_reserve" | "no";
+
+export interface FeasibilityReport {
+  mode: Mode;
+  feasible: Feasibility;
+  reason: string;
+  devicesFound: { platform: Platform; model: string; count: number; names: string[] }[];
+}

@@ -3,7 +3,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildCatalog, filterCatalog, type CatalogInput } from "@/lib/deviceCatalog";
+import {
+  buildCatalog,
+  filterCatalog,
+  type CatalogEntry,
+  type CatalogInput,
+} from "@/lib/deviceCatalog";
 import type { Device } from "@/types";
 import type { FarmDevice } from "@/lib/farmApi";
 
@@ -86,15 +91,22 @@ describe("buildCatalog", () => {
 
   it("hides the web target unless the beta is on or it is the connected device", () => {
     const web = dev({ serial: "web", platform: "web", physical: false });
-    expect(buildCatalog({ ...base, devices: [web], webBrowserEnabled: false })).toHaveLength(0);
+    const localOnly = (entries: CatalogEntry[]) => entries.filter((e) => e.source === "local");
     expect(
-      buildCatalog({ ...base, devices: [web], webBrowserEnabled: false, currentSerial: "web" }),
+      localOnly(buildCatalog({ ...base, devices: [web], webBrowserEnabled: false })),
+    ).toHaveLength(0);
+    expect(
+      localOnly(
+        buildCatalog({ ...base, devices: [web], webBrowserEnabled: false, currentSerial: "web" }),
+      ),
     ).toHaveLength(1);
   });
 
   it("lists farm phones and cloud fleets only when signed in", () => {
+    // Signed out: no farm phones, but cloud fleets stay listed to choose a build.
     const signedOut = buildCatalog({ ...base, farmDevices: [farm({})] });
-    expect(signedOut.filter((e) => e.source !== "local")).toHaveLength(0);
+    expect(signedOut.filter((e) => e.source === "farm")).toHaveLength(0);
+    expect(signedOut.filter((e) => e.source === "cloud")).toHaveLength(3);
 
     const entries = buildCatalog({
       ...base,
@@ -126,7 +138,11 @@ describe("buildCatalog", () => {
       ],
       currentSerial: "C",
     });
-    expect(entries.map((e) => e.id)).toEqual(["local:C", "local:B", "local:avd:A"]);
+    expect(entries.filter((e) => e.source === "local").map((e) => e.id)).toEqual([
+      "local:C",
+      "local:B",
+      "local:avd:A",
+    ]);
   });
 });
 
@@ -167,7 +183,7 @@ describe("tablets", () => {
         dev({ serial: "c", model: "Pixel 8" }),
       ],
     });
-    expect(entries.map((e) => [e.name, e.tablet])).toEqual([
+    expect(entries.filter((e) => e.source === "local").map((e) => [e.name, e.tablet])).toEqual([
       ["Galaxy Tab S9", true],
       ['iPad Air 13"', true],
       ["Pixel 8", false],
@@ -202,5 +218,20 @@ describe("filterCatalog", () => {
       "local:R5C",
     );
     expect(filterCatalog(entries, { source: "all", kind: "all", query: "ios" }).length).toBe(2);
+  });
+});
+
+describe("cloud fleets without sign-in", () => {
+  it("lists cloud fleets and no farm phones when signed out", () => {
+    const entries = buildCatalog({
+      ...base,
+      signedIn: false,
+      devices: [],
+      farmDevices: [farm({ id: "a", marketingName: "Galaxy S24 Ultra" })],
+    });
+    expect(entries.map((e) => e.id)).toEqual(
+      expect.arrayContaining(["cloud:android", "cloud:ios"]),
+    );
+    expect(entries.some((e) => e.source === "farm")).toBe(false);
   });
 });

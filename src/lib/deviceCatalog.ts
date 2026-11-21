@@ -193,23 +193,25 @@ export function buildCatalog(input: CatalogInput): CatalogEntry[] {
     )
     .map((d) => localEntry(d, input.currentSerial, input.pendingConnectSerial));
 
-  const remote: CatalogEntry[] = input.signedIn
-    ? [
-        ...input.farmDevices.map((f) =>
+  // Farm phones need an account. Cloud fleets are always listed so the build
+  // can be chosen before signing in; starting a cloud run still needs sign-in.
+  const remote: CatalogEntry[] = [
+    ...(input.signedIn
+      ? input.farmDevices.map((f) =>
           farmEntry(f, input.farmSessionDeviceId, input.farmSessionConnecting),
-        ),
-        ...CLOUD_FLEETS.map(
-          (c): CatalogEntry => ({
-            ...c,
-            id: `cloud:${c.id}`,
-            tablet: false,
-            source: "cloud",
-            state: input.cloudTarget === c.id ? "target" : "ready",
-            cloud: c.id,
-          }),
-        ),
-      ]
-    : [];
+        )
+      : []),
+    ...CLOUD_FLEETS.map(
+      (c): CatalogEntry => ({
+        ...c,
+        id: `cloud:${c.id}`,
+        tablet: false,
+        source: "cloud",
+        state: input.cloudTarget === c.id ? "target" : "ready",
+        cloud: c.id,
+      }),
+    ),
+  ];
 
   return [...local, ...remote].sort(
     (a, b) =>

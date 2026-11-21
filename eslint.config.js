@@ -79,4 +79,11 @@ export default [
     // Playwright fixtures call `use(...)`, which is not a React hook.
     rules: { "react-hooks/rules-of-hooks": "off" },
   },
+  {
+    // The MCP server and CLI run on Node, not in the webview.
+    files: ["mcp/**/*.ts"],
+    languageOptions: {
+      globals: { ...globals.node, NodeJS: "readonly" },
+    },
+  },
 ];

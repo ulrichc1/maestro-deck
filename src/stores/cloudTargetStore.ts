@@ -4,6 +4,7 @@
 import { create } from "zustand";
 
 import type { CloudJobPlatform } from "@/lib/cloudJobs";
+import type { CloudParallelMode } from "@/lib/cloudParallel";
 
 interface CloudTargetState {
   /**
@@ -18,10 +19,15 @@ interface CloudTargetState {
   target: CloudJobPlatform | null;
   select: (platform: CloudJobPlatform) => void;
   clear: () => void;
+  /** How "Run all" splits the flows across cloud jobs. */
+  parallelMode: CloudParallelMode;
+  setParallelMode: (mode: CloudParallelMode) => void;
 }
 
 export const useCloudTargetStore = create<CloudTargetState>((set) => ({
   target: null,
   select: (target) => set({ target }),
   clear: () => set({ target: null }),
+  parallelMode: "sequential",
+  setParallelMode: (parallelMode) => set({ parallelMode }),
 }));

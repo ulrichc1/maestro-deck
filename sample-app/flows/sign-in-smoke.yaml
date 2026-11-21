@@ -1,0 +1,5 @@
+# Smoke test for sample-app.apk: the app opens and shows its sign-in screen.
+appId: com.maestrodeck.sample
+---
+- launchApp
+- assertVisible: "Sign in"

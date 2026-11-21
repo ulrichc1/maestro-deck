@@ -4,7 +4,10 @@
 import { join, tempDir } from "@tauri-apps/api/path";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 
+import type { CloudJobPlatform } from "@/lib/cloudJobs";
 import { startCloudRun, stopWatchingCloudRun } from "@/lib/cloudRunner";
+import { flowPaths } from "@/lib/cloudParallel";
+import { startCloudParallelRun, stopWatchingParallelRun } from "@/lib/cloudParallelRunner";
 import { flowDisplayName, parseFlow, type Step } from "@/lib/flowAst";
 import { writeFlow } from "@/lib/flow-io";
 import { ipc } from "@/lib/ipc";
@@ -81,6 +84,11 @@ export async function runOpenFlow(): Promise<void> {
 export async function runAllFlows(): Promise<void> {
   const folder = useWorkspaceStore.getState().folderPath;
   if (!folder || busy()) return;
+  const cloudPlatform = useCloudTargetStore.getState().target;
+  if (cloudPlatform) {
+    await runAllOnCloud(cloudPlatform);
+    return;
+  }
   useRunStore.getState().setStarting();
   try {
     // Persist any unsaved edits to the current file so they're part of the run.
@@ -97,6 +105,26 @@ export async function runAllFlows(): Promise<void> {
   } catch (err) {
     useRunStore.getState().startFailed();
     toast.error("Run all failed", message(err));
+  }
+}
+
+/** Runs every flow of the folder on the cloud, split by the chosen mode. */
+async function runAllOnCloud(platform: CloudJobPlatform): Promise<void> {
+  const flows = flowPaths(useWorkspaceStore.getState().tree);
+  if (flows.length === 0) {
+    toast.error("No flows", "The folder has no .yaml flow to run.");
+    return;
+  }
+  const mode = useCloudTargetStore.getState().parallelMode;
+  useRunStore.getState().setStarting();
+  try {
+    // Persist unsaved edits first, as the local "Run all" does.
+    const { filePath, dirty } = useFlowStore.getState();
+    if (dirty && filePath) await writeFlow(filePath);
+    await startCloudParallelRun(mode, flows, platform);
+  } catch (err) {
+    useRunStore.getState().startFailed();
+    toast.error("Cloud run failed", message(err));
   }
 }
 
@@ -126,6 +154,7 @@ export async function runFromLine(line: number): Promise<void> {
 /** Stops the run in progress. A cloud run has no local process and no cancel
  *  endpoint: the most the app can do is stop watching, and it says so. */
 export async function stopRun(): Promise<void> {
+  if (stopWatchingParallelRun()) return;
   if (useRunStore.getState().cloud) {
     stopWatchingCloudRun();
     return;
