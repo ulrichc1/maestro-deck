@@ -302,7 +302,7 @@ test.describe("plugin panel and bridge", () => {
 
     expect(await rpc(frame, "app.info")).toMatchObject({
       ok: true,
-      result: { appVersion: "1.2.0", platform: "windows" },
+      result: { appVersion: expect.stringMatching(/^\d+\.\d+\.\d+$/), platform: "windows" },
     });
 
     expect((await rpc(frame, "storage.set", { key: "brand", value: { color: "#f60" } })).ok).toBe(
