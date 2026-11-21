@@ -67,6 +67,21 @@ export class RunManager {
   private inflight = new Set<Promise<unknown>>();
   private readonly home: string;
 
+  /** Folder where runs and temporary files are stored. */
+  get homeDir(): string {
+    return this.home;
+  }
+
+  /** Devices a running job is using right now, with the run that holds them. */
+  busyDevices(): Map<string, string> {
+    const busy = new Map<string, string>();
+    for (const { record } of this.runs.values()) {
+      if (record.state !== "running") continue;
+      for (const r of record.results) if (r.status === "running" && r.deviceId) busy.set(r.deviceId, record.id);
+    }
+    return busy;
+  }
+
   constructor(home: string = process.env.MAESTRO_DECK_MCP_HOME ?? join(homedir(), ".maestro-deck-mcp")) {
     this.home = resolve(home);
   }

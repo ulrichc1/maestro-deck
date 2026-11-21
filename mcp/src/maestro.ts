@@ -103,6 +103,18 @@ export interface ExecuteOptions {
   timeoutMs?: number;
   /** After SIGTERM, wait this long before SIGKILL. Default 5 seconds. */
   killGraceMs?: number;
+  /** Variables passed to the flow (maestro -e KEY=VALUE). */
+  env?: Record<string, string>;
+}
+
+/** `-e KEY=VALUE` arguments, refusing names that Maestro or the shell could misread. */
+export function envArgs(env: Record<string, string> | undefined): string[] {
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(env ?? {})) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw new Error(`Invalid variable name "${k}": use letters, digits and underscores.`);
+    out.push("-e", `${k}=${v}`);
+  }
+  return out;
 }
 
 export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
@@ -203,7 +215,7 @@ export function executeFlow(opts: ExecuteOptions) {
     const reportPath = join(jobDir, "junit.xml");
     const args = [
       "--udid", device.id,
-      "test", job.flow,
+      "test", ...envArgs(opts.env), job.flow,
       "--format", "JUNIT",
       "--output", reportPath,
       "--test-output-dir", jobDir,

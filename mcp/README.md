@@ -57,22 +57,84 @@ devices found, and whether a cloud token is configured.
 | `MAESTRO_BIN` | Path of the Maestro CLI |
 | `ADB_BIN` | Path of adb |
 | `MAESTRO_DECK_MCP_HOME` | Where runs are stored. Default `~/.maestro-deck-mcp` |
+| `MAESTRO_DECK_FLOWS_DIRS` | Extra folders flows may be written to (default: the start folder only) |
+| `EMULATOR_BIN` | Path of the Android emulator binary, if not found automatically |
 | `MAESTRO_DECK_CLOUD_TOKEN` | Account token for the cloud tools. Never printed |
 
+## Working without the UI
+
+The server covers the whole loop an engineer does in the desktop app: get a device, install the
+app, look at the screen, find selectors, try steps, save a flow, run it, understand a failure.
+
+```text
+list_available_devices -> boot_device -> install_app (returns the appId)
+   -> take_screenshot / get_view_hierarchy -> find_selectors "Sign in"
+   -> run_steps (try them, nothing is saved) -> write_flow / edit_flow
+   -> run_flows -> explain_failure -> edit_flow -> rerun_failed -> compare_runs
+```
+
+Three prompts walk an agent through it: `author_flow`, `debug_failure`, `run_suite_everywhere`.
+
 ## Tools
+
+**Devices and apps**
 
 | Tool | What it does |
 |---|---|
 | `doctor` | Maestro version, adb, usable devices, cloud token present |
 | `list_devices` | Android devices/emulators (adb) and iOS simulators/phones (devicectl), with state |
+| `list_available_devices` | Emulators (AVDs) and simulators that exist here, running or not |
+| `boot_device` | Start an Android emulator (by AVD name) or an iOS simulator (by name or UDID) and wait until ready |
+| `shutdown_device` | Stop an emulator or simulator. A physical phone is refused |
+| `install_app` | Install an `.apk`, or a `.app` (or zipped `.app`) on iOS. Returns the `appId` |
+| `list_apps` | Apps the user installed, with the ids to use as `appId` |
+
+**The screen**
+
+| Tool | What it does |
+|---|---|
+| `take_screenshot` | The device screen as an image, shrunk to 1600 px by default (`maxSize`) |
+| `get_view_hierarchy` | The elements on screen: text, id, labels, bounds, state |
+| `find_selectors` | Ready-to-use steps for an element, best first: unique id, unique text, index, position |
+| `run_steps` | Try steps in a temporary flow that is deleted afterwards. Per-step result, the reason, a screenshot |
+
+**Flows**
+
+| Tool | What it does |
+|---|---|
+| `list_flows`, `describe_flow`, `read_flow` | Find flows (appId, tags, step count), read them as numbered steps with their line |
+| `write_flow` | Create a flow from a header and steps. Checked with Maestro first; never overwrites unless asked |
+| `edit_flow` | Insert, replace or delete steps, or change the header, keeping comments. `dryRun` previews |
+| `check_flow_syntax` | Validate flows without a device |
+
+**Runs and failures**
+
+| Tool | What it does |
+|---|---|
 | `check_parallel_feasibility` | Whether a mode can run on the devices connected now |
-| `list_flows`, `read_flow`, `check_flow_syntax` | Find, read and validate flows without a device |
-| `run_flows` | Run flows locally. Modes below. `waitSeconds` waits for the verdict |
+| `run_flows` | Run flows. Modes below. Pin devices (`deviceIds`), filter by `includeTags` / `excludeTags`, pass `env`, `waitSeconds` waits for the verdict |
 | `wait_for_run`, `get_run_status`, `get_run_results`, `get_run_report` | Follow a run, read per-job results and JUnit reports |
-| `cancel_run` | Stop a run: running jobs are killed, queued jobs cancelled |
-| `list_runs` | Runs of this and earlier sessions. A run left mid-flight by a crash is `interrupted` |
+| `explain_failure` | Why a job failed: the step and its line, the error, what was on screen, similar text, the screenshot, log errors, what to try |
+| `read_artifact` | Read a screenshot or log a job left behind, limited to the run folder |
+| `rerun_failed`, `compare_runs` | Run again only what failed; list regressions and fixes between two runs |
+| `cancel_run`, `list_runs` | Stop a run; runs of this and earlier sessions (a run left mid-flight is `interrupted`) |
+
+**CI and cloud**
+
+| Tool | What it does |
+|---|---|
 | `generate_github_workflow` | YAML for a parallel Android or iOS matrix on GitHub Actions |
 | `cloud_run_flows`, `cloud_get_jobs` | Run on the Maestro Deck cloud and read job status |
+
+### Safety
+
+- `write_flow` and `edit_flow` only write inside the folder the server was started in, plus any
+  folders listed in `MAESTRO_DECK_FLOWS_DIRS` (separated like `PATH`). Paths that escape it, even
+  through a symlink, are refused, and only `.yaml` / `.yml` files are written.
+- A flow is validated, structurally and by Maestro, before anything is written or changed.
+- Only one operation at a time drives a device: while a run uses it, `run_steps`,
+  `get_view_hierarchy` and `find_selectors` say it is busy instead of fighting over the driver.
+- `read_artifact` cannot read outside the run's folder.
 
 ### Modes
 

@@ -1,89 +1,43 @@
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { extname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import {
-  CloudError,
-  planCloudJobs,
-  submitCloudJob,
-  waitForCloudJobs,
-  getCloudJobStatus,
-  type CloudClientConfig,
-} from "./cloud.js";
+import { CloudError, planCloudJobs, submitCloudJob, waitForCloudJobs, getCloudJobStatus } from "./cloud.js";
+import { defaultExec, resolveEmulatorBin } from "./devicetools.js";
 import { checkFeasibility } from "./feasibility.js";
-import { DEFAULT_JOB_TIMEOUT_MS, discoverDevices, executeFlow, maestroVersion, resolveAdbBin, resolveMaestroBin } from "./maestro.js";
-import { RunManager, type RunRecord } from "./runs.js";
-import type { Mode } from "./types.js";
+import { flowRoots } from "./fsguard.js";
+import { DeviceLocks } from "./locks.js";
+import { discoverDevices, maestroVersion, resolveAdbBin, resolveMaestroBin } from "./maestro.js";
+import { RunManager } from "./runs.js";
+import { registerAuthoringTools } from "./tools-authoring.js";
+import { fail, text, type FullDeps, type ServerDeps } from "./tools-common.js";
+import { registerPrompts } from "./prompts.js";
+import { MODES, registerRunTools, resolveFlows, resultsPayload, summarizeRun } from "./tools-runs.js";
 import { generateWorkflow } from "./workflow.js";
 
 const execFileAsync = promisify(execFile);
 
-export const MODES = [
-  "sequential",
-  "android_same_model",
-  "android_different_models",
-  "ios_same_model",
-  "ios_different_models",
-  "ios_android",
-] as const satisfies readonly Mode[];
-
-export interface ServerDeps {
-  bin: string;
-  adbBin: string;
-  runs: RunManager;
-  cloud: CloudClientConfig;
-}
-
-const text = (value: unknown) => ({
-  content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }],
-});
-
-const fail = (message: string) => ({ content: [{ type: "text" as const, text: message }], isError: true });
-
-/** Resolves flow paths against `cwd` and checks each one is a YAML flow file. */
-export function resolveFlows(flows: string[], cwd: string): { ok: string[] } | { error: string } {
-  const ok: string[] = [];
-  for (const f of flows) {
-    const abs = isAbsolute(f) ? f : resolve(cwd, f);
-    if (!existsSync(abs) || !statSync(abs).isFile()) return { error: `Flow not found: ${abs}` };
-    if (![".yaml", ".yml"].includes(extname(abs))) return { error: `Not a YAML flow: ${abs}` };
-    ok.push(abs);
-  }
-  if (ok.length === 0) return { error: "No flow given." };
-  return { ok };
-}
-
-const FINISHED_JOB = new Set(["passed", "failed", "error", "timeout", "cancelled"]);
-
-function summarizeRun(run: RunRecord) {
-  return {
-    id: run.id,
-    mode: run.mode,
-    state: run.state,
-    createdAt: run.createdAt,
-    finishedAt: run.finishedAt,
-    summary: run.summary,
-    progress: run.results.filter((r) => FINISHED_JOB.has(r.status)).length,
-    retiredDevices: run.retiredDevices,
-  };
-}
-
-function resultsPayload(run: RunRecord) {
-  return {
-    ...summarizeRun(run),
-    byPlatform: {
-      android: run.results.filter((r) => r.platform === "android"),
-      ios: run.results.filter((r) => r.platform === "ios"),
-    },
-  };
-}
+export type { ServerDeps } from "./tools-common.js";
+export { MODES, resolveFlows };
 
 const MAX_REPORT_CHARS = 20_000;
 
-export function createServer(deps: ServerDeps): McpServer {
-  const server = new McpServer({ name: "maestro-deck", version: "0.2.0" });
+export function createServer(input: ServerDeps): McpServer {
+  const deps: FullDeps = {
+    ...input,
+    ctx: input.ctx ?? {
+      adbBin: input.adbBin,
+      maestroBin: input.bin,
+      emulatorBin: resolveEmulatorBin(input.adbBin),
+      logDir: join(input.runs.homeDir, "logs"),
+      exec: defaultExec,
+    },
+    locks: input.locks ?? new DeviceLocks(),
+    flowRoots: input.flowRoots ?? flowRoots(),
+  };
+  const server = new McpServer({ name: "maestro-deck", version: "0.3.0" });
 
   server.registerTool(
     "doctor",
@@ -126,23 +80,6 @@ export function createServer(deps: ServerDeps): McpServer {
   );
 
   server.registerTool(
-    "list_flows",
-    {
-      description: "List Maestro YAML flow files in a directory (not recursive).",
-      inputSchema: { directory: z.string().describe("Absolute or relative to the server working directory") },
-    },
-    async ({ directory }) => {
-      const dir = resolve(directory);
-      if (!existsSync(dir)) return fail(`Directory not found: ${dir}`);
-      const files = readdirSync(dir)
-        .filter((f) => [".yaml", ".yml"].includes(extname(f)))
-        .sort()
-        .map((f) => join(dir, f));
-      return text(files);
-    },
-  );
-
-  server.registerTool(
     "read_flow",
     {
       description: "Read the content of a Maestro YAML flow file.",
@@ -176,44 +113,6 @@ export function createServer(deps: ServerDeps): McpServer {
         }),
       );
       return text({ allValid: results.every((r) => r.valid), results });
-    },
-  );
-
-  server.registerTool(
-    "run_flows",
-    {
-      description:
-        "Start Maestro flows on local devices. Returns a runId at once unless waitSeconds is set. Mode 'sequential' uses one device; the other modes run in parallel from a queue, retry infrastructure failures on another device, and retire a device that keeps failing. Each job has a time limit.",
-      inputSchema: {
-        flows: z.array(z.string()).min(1).describe("Flow files (YAML)"),
-        mode: z.enum(MODES).default("sequential"),
-        timeoutSeconds: z.number().int().min(1).max(7200).default(DEFAULT_JOB_TIMEOUT_MS / 1000).describe("Kill a job that runs longer than this"),
-        retries: z.number().int().min(0).max(5).default(1).describe("Extra attempts after an infrastructure failure"),
-        retryFailed: z.boolean().default(false).describe("Also retry flows that failed their assertions"),
-        waitSeconds: z.number().int().min(0).max(1800).default(0).describe("Wait up to this long for the run to finish before answering"),
-      },
-    },
-    async ({ flows, mode, timeoutSeconds, retries, retryFailed, waitSeconds }) => {
-      const resolved = resolveFlows(flows, process.cwd());
-      if ("error" in resolved) return fail(resolved.error);
-      try {
-        const devices = await discoverDevices(deps.adbBin);
-        const run = deps.runs.start({
-          mode,
-          flows: resolved.ok,
-          devices,
-          maxAttempts: retries + 1,
-          retryFailed,
-          executeFor: (artifactsDir) => executeFlow({ bin: deps.bin, artifactsDir, timeoutMs: timeoutSeconds * 1000 }),
-        });
-        if (waitSeconds > 0) {
-          const finished = await deps.runs.waitFor(run.id, waitSeconds * 1000);
-          return text(resultsPayload(finished ?? run));
-        }
-        return text({ runId: run.id, state: run.state, jobs: run.summary.total, artifactsDir: run.artifactsDir });
-      } catch (err) {
-        return fail((err as Error).message);
-      }
     },
   );
 
@@ -389,6 +288,10 @@ export function createServer(deps: ServerDeps): McpServer {
       }
     },
   );
+
+  registerRunTools(server, deps);
+  registerAuthoringTools(server, deps);
+  registerPrompts(server);
 
   return server;
 }

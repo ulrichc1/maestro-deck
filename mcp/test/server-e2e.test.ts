@@ -249,8 +249,9 @@ describe("flows and workflow tools", () => {
   it("lists, reads and syntax-checks flows", async () => {
     await withEnv(async () => {
       const h = await harness();
-      const list = (await call(h, "list_flows", { directory: flows })).json as string[];
-      expect(list).toContain(f("ok1.yaml"));
+      const list = (await call(h, "list_flows", { directory: flows })).json as { path: string; appId?: string; steps?: number; error?: string }[];
+      expect(list.map((x) => x.path)).toContain(f("ok1.yaml"));
+      expect(list.find((x) => x.path === f("ok1.yaml"))).toMatchObject({ appId: "x", steps: 1 });
       expect((await call(h, "read_flow", { path: f("ok1.yaml") })).body).toContain("launchApp");
       const check = (await call(h, "check_flow_syntax", { flows: [f("ok1.yaml"), f("bad.yaml")] })).json as { allValid: boolean; results: { valid: boolean; message?: string }[] };
       expect(check.allValid).toBe(false);

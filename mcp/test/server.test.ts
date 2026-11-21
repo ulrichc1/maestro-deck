@@ -17,22 +17,11 @@ describe("MCP server", () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
-      "cancel_run",
-      "check_flow_syntax",
-      "check_parallel_feasibility",
-      "cloud_get_jobs",
-      "cloud_run_flows",
-      "doctor",
-      "generate_github_workflow",
-      "get_run_report",
-      "get_run_results",
-      "get_run_status",
-      "list_devices",
-      "list_flows",
-      "list_runs",
-      "read_flow",
-      "run_flows",
-      "wait_for_run",
+      "boot_device", "cancel_run", "check_flow_syntax", "check_parallel_feasibility", "cloud_get_jobs", "cloud_run_flows",
+      "compare_runs", "describe_flow", "doctor", "edit_flow", "explain_failure", "find_selectors",
+      "generate_github_workflow", "get_run_report", "get_run_results", "get_run_status", "get_view_hierarchy",
+      "install_app", "list_apps", "list_available_devices", "list_devices", "list_flows", "list_runs", "read_artifact",
+      "read_flow", "rerun_failed", "run_flows", "run_steps", "shutdown_device", "take_screenshot", "wait_for_run", "write_flow",
     ]);
     const feasibility = await client.callTool({ name: "check_parallel_feasibility", arguments: { mode: "ios_android" } });
     expect(feasibility.isError).not.toBe(true);
