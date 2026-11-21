@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { explainFailure } from "../src/failure.js";
-import { resolveWritableFlow } from "../src/fsguard.js";
+import { resolveWritableFlow, writeFlowFile } from "../src/fsguard.js";
 
 const FIX = join(__dirname, "fixtures/failed-assertion");
 
@@ -66,5 +66,34 @@ describe("resolveWritableFlow", () => {
     const outside = mkdtempSync(join(tmpdir(), "outside-"));
     symlinkSync(outside, join(root, "link"));
     expect(() => resolveWritableFlow("link/x.yaml", [root])).toThrow(/outside the allowed/);
+  });
+
+  it("refuses a symlink as the file itself, whether it points out of the folder, inside it, or nowhere", () => {
+    const outside = mkdtempSync(join(tmpdir(), "outside-file-"));
+    const target = join(outside, "victim.yaml");
+    writeFileSync(target, "precious");
+    symlinkSync(target, join(root, "leaf.yaml"));
+    symlinkSync(join(outside, "not-yet.yaml"), join(root, "dangling.yaml"));
+    writeFileSync(join(root, "real.yaml"), "x");
+    symlinkSync(join(root, "real.yaml"), join(root, "inside.yaml"));
+    for (const name of ["leaf.yaml", "dangling.yaml", "inside.yaml"]) {
+      expect(() => resolveWritableFlow(name, [root])).toThrow(/symlink/);
+    }
+    expect(readFileSync(target, "utf8")).toBe("precious");
+  });
+
+  it("writeFlowFile will not follow a link swapped in after the check", () => {
+    const outside = mkdtempSync(join(tmpdir(), "swap-"));
+    const target = join(outside, "victim.yaml");
+    writeFileSync(target, "precious");
+    const path = join(root, "swapped.yaml");
+    symlinkSync(target, path); // the "attacker" replaces the file between check and write
+    expect(() => writeFlowFile(path, "overwritten")).toThrow(/symlink/);
+    expect(readFileSync(target, "utf8")).toBe("precious");
+    const ok = join(root, "plain.yaml");
+    writeFlowFile(ok, "fine");
+    expect(readFileSync(ok, "utf8")).toBe("fine");
+    writeFlowFile(ok, "shorter");
+    expect(readFileSync(ok, "utf8")).toBe("shorter");
   });
 });

@@ -19,7 +19,7 @@ import {
   takeScreenshot,
 } from "./devicetools.js";
 import { buildFlow, describeFlow, editFlow, FlowError, parseStepsInput, stepLine, stepSource, stepsOf, type EditOp } from "./flowfile.js";
-import { resolveWritableFlow } from "./fsguard.js";
+import { resolveWritableFlow, writeFlowFile } from "./fsguard.js";
 import { discoverDevices } from "./maestro.js";
 import { DEFAULT_MAX_IMAGE, fail, image, claimDevice, resolveDevice, text, type FullDeps } from "./tools-common.js";
 import { screenSize, suggestSelectors, visibleNodes, labelsOf } from "./ui.js";
@@ -51,7 +51,7 @@ async function maestroSyntaxError(deps: FullDeps, content: string): Promise<stri
 
 function savedFlow(deps: FullDeps, abs: string, content: string, verb: string) {
   mkdirSync(dirname(abs), { recursive: true });
-  writeFileSync(abs, content);
+  writeFlowFile(abs, content);
   const info = describeFlow(content);
   return { path: abs, result: verb, appId: info.appId ?? info.url, name: info.name, tags: info.tags, steps: info.stepCount };
 }
@@ -165,7 +165,7 @@ export function registerAuthoringTools(server: McpServer, deps: FullDeps): void 
         if (bad) return fail(`Maestro rejected the edited flow, the file is unchanged:\n${bad}`);
         const steps = stepsOf(content).map((_, i) => stepSource(content, i));
         if (a.dryRun) return text({ path: abs, dryRun: true, summary, steps, content });
-        writeFileSync(abs, content);
+        writeFlowFile(abs, content);
         return text({ path: abs, summary, steps, syntax: "valid" });
       } catch (err) {
         return fail(message(err));
