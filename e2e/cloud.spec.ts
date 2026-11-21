@@ -78,7 +78,8 @@ test.describe("cloud runs", () => {
     await expect(page.locator(".cm-content")).toContainText("Welcome");
     await targetEmulator(app);
     await expect(page.getByRole("button", { name: "app-debug.apk Change" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Run all" })).toBeDisabled();
+    // With a build chosen, Run all is available in the cloud: it runs every flow as parallel jobs.
+    await expect(page.getByRole("button", { name: "Run all" })).toBeEnabled();
     await page.getByRole("button", { name: "Run in cloud" }).click();
     await page.getByRole("button", { name: "Technical" }).click();
 

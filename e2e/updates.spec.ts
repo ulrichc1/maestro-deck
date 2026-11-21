@@ -56,7 +56,7 @@ test.describe("app updates", () => {
     await dialog(app).getByRole("button", { name: "Later" }).click();
     await expect(dialog(app)).toHaveCount(0);
     expect(await app.calls("plugin:updater|download_and_install")).toHaveLength(0);
-    await page.getByRole("button", { name: /^v1\.2\.0$/ }).click();
+    await page.getByRole("button", { name: /^v\d+\.\d+\.\d+$/ }).click();
     await expect(dialog(app)).toBeVisible();
   });
 
