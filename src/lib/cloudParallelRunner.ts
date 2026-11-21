@@ -10,6 +10,7 @@ import {
   type CloudJobOutcome,
   type CloudParallelMode,
 } from "@/lib/cloudParallel";
+import { useCloudAuthStore } from "@/stores/cloudAuthStore";
 import { useRunStore } from "@/stores/runStore";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
 
@@ -63,6 +64,8 @@ export async function startCloudParallelRun(
     });
   } finally {
     activeWatches = [];
+    // Each accepted job moved the balance; refresh so the runs counter is right.
+    void useCloudAuthStore.getState().refreshBilling();
   }
 
   const passed = outcomes.filter((o) => o.state === "passed").length;
