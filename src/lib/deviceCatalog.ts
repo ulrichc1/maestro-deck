@@ -197,7 +197,9 @@ export function buildCatalog(input: CatalogInput): CatalogEntry[] {
   // can be chosen before signing in; starting a cloud run still needs sign-in.
   const remote: CatalogEntry[] = [
     ...(input.signedIn
-      ? input.farmDevices.map((f) => farmEntry(f, input.farmSessionDeviceId, input.farmSessionConnecting))
+      ? input.farmDevices.map((f) =>
+          farmEntry(f, input.farmSessionDeviceId, input.farmSessionConnecting),
+        )
       : []),
     ...CLOUD_FLEETS.map(
       (c): CatalogEntry => ({

@@ -99,7 +99,10 @@ export async function selectEntry(e: CatalogEntry): Promise<boolean> {
         return true;
       }
       if (useCloudAuthStore.getState().user === null) {
-        toast.error("Sign in first", "Sign in to Maestro Deck to run on the cloud. You can still choose the build now.");
+        toast.error(
+          "Sign in first",
+          "Sign in to Maestro Deck to run on the cloud. You can still choose the build now.",
+        );
         return false;
       }
       if (!cloudAppPath(e.cloud) && !(await pickCloudArtifact(e.cloud))) return false;

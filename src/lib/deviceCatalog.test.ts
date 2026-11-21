@@ -3,7 +3,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildCatalog, filterCatalog, type CatalogEntry, type CatalogInput } from "@/lib/deviceCatalog";
+import {
+  buildCatalog,
+  filterCatalog,
+  type CatalogEntry,
+  type CatalogInput,
+} from "@/lib/deviceCatalog";
 import type { Device } from "@/types";
 import type { FarmDevice } from "@/lib/farmApi";
 
@@ -87,9 +92,13 @@ describe("buildCatalog", () => {
   it("hides the web target unless the beta is on or it is the connected device", () => {
     const web = dev({ serial: "web", platform: "web", physical: false });
     const localOnly = (entries: CatalogEntry[]) => entries.filter((e) => e.source === "local");
-    expect(localOnly(buildCatalog({ ...base, devices: [web], webBrowserEnabled: false }))).toHaveLength(0);
     expect(
-      localOnly(buildCatalog({ ...base, devices: [web], webBrowserEnabled: false, currentSerial: "web" })),
+      localOnly(buildCatalog({ ...base, devices: [web], webBrowserEnabled: false })),
+    ).toHaveLength(0);
+    expect(
+      localOnly(
+        buildCatalog({ ...base, devices: [web], webBrowserEnabled: false, currentSerial: "web" }),
+      ),
     ).toHaveLength(1);
   });
 
@@ -129,7 +138,11 @@ describe("buildCatalog", () => {
       ],
       currentSerial: "C",
     });
-    expect(entries.filter((e) => e.source === "local").map((e) => e.id)).toEqual(["local:C", "local:B", "local:avd:A"]);
+    expect(entries.filter((e) => e.source === "local").map((e) => e.id)).toEqual([
+      "local:C",
+      "local:B",
+      "local:avd:A",
+    ]);
   });
 });
 
@@ -216,7 +229,9 @@ describe("cloud fleets without sign-in", () => {
       devices: [],
       farmDevices: [farm({ id: "a", marketingName: "Galaxy S24 Ultra" })],
     });
-    expect(entries.map((e) => e.id)).toEqual(expect.arrayContaining(["cloud:android", "cloud:ios"]));
+    expect(entries.map((e) => e.id)).toEqual(
+      expect.arrayContaining(["cloud:android", "cloud:ios"]),
+    );
     expect(entries.some((e) => e.source === "farm")).toBe(false);
   });
 });

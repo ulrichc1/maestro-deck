@@ -183,13 +183,13 @@ test.describe("Billy", () => {
 test.describe("updates", () => {
   test("checking by hand with no update says so", async ({ app, page }) => {
     await app.launch();
-    await page.getByRole("button", { name: /^v1\.2\.0$/ }).click();
+    await page.getByRole("button", { name: /^v\d+\.\d+\.\d+$/ }).click();
     await expect(page.getByText("You're up to date")).toBeVisible();
   });
 
   test("a failed check is reported", async ({ app, page }) => {
     await app.launch({ failures: { "plugin:updater|check": "network unreachable" } });
-    await page.getByRole("button", { name: /^v1\.2\.0$/ }).click();
+    await page.getByRole("button", { name: /^v\d+\.\d+\.\d+$/ }).click();
     await expect(page.getByText("network unreachable").first()).toBeVisible();
   });
 });
