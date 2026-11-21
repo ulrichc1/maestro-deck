@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -200,6 +200,52 @@ describe("creating and editing flows", () => {
     expect(readFileSync(join(h.root, "a.yaml"), "utf8")).toContain("launchApp");
     const forced = await call(h, "write_flow", { path: "a.yaml", appId: "x", steps: ["back"], overwrite: true });
     expect(forced.json.result).toBe("overwritten");
+  });
+
+  it("delete_flow only shows what it would remove until it is confirmed", async () => {
+    const h = await harness();
+    await call(h, "write_flow", { path: "gone.yaml", appId: "com.example", name: "Gone", steps: ["launchApp", "back"] });
+    const file = join(h.root, "gone.yaml");
+    const preview = await call(h, "delete_flow", { path: "gone.yaml" });
+    expect(preview.json).toMatchObject({ deleted: false, wouldDelete: { appId: "com.example", name: "Gone", steps: 2 } });
+    expect(existsSync(file)).toBe(true);
+    const done = await call(h, "delete_flow", { path: "gone.yaml", confirm: true });
+    expect(done.json).toMatchObject({ deleted: true, was: { appId: "com.example" } });
+    expect(existsSync(file)).toBe(false);
+    expect((await call(h, "delete_flow", { path: "gone.yaml", confirm: true })).body).toMatch(/Flow not found/);
+  });
+
+  it("delete_flow stays inside the project folder, on YAML files, and never follows a symlink", async () => {
+    const h = await harness();
+    const outside = join(mkdtempSync(join(tmpdir(), "auth-out-")), "victim.yaml");
+    writeFileSync(outside, "appId: x\n---\n- launchApp\n");
+    symlinkSync(outside, join(h.root, "link.yaml"));
+    writeFileSync(join(h.root, "notes.txt"), "keep");
+    mkdirSync(join(h.root, "dir.yaml"));
+    expect((await call(h, "delete_flow", { path: outside, confirm: true })).body).toMatch(/outside the allowed/);
+    expect((await call(h, "delete_flow", { path: "../x.yaml", confirm: true })).body).toMatch(/outside the allowed/);
+    expect((await call(h, "delete_flow", { path: "link.yaml", confirm: true })).body).toMatch(/symlink/);
+    expect((await call(h, "delete_flow", { path: "notes.txt", confirm: true })).body).toMatch(/\.yaml/);
+    expect((await call(h, "delete_flow", { path: "dir.yaml", confirm: true })).body).toMatch(/folder/);
+    expect(existsSync(outside)).toBe(true);
+    expect(existsSync(join(h.root, "notes.txt"))).toBe(true);
+    expect(existsSync(join(h.root, "dir.yaml"))).toBe(true);
+  });
+
+  it("delete_flow refuses a flow that a run in progress is using, and can delete a broken flow", async () => {
+    const h = await harness();
+    await call(h, "write_flow", { path: "busy.yaml", appId: "x", steps: ["launchApp"] });
+    const file = join(h.root, "busy.yaml");
+    const real = h.runs.list.bind(h.runs);
+    h.runs.list = () => [{ id: "run-1", state: "running", flows: [file] } as never];
+    const blocked = await call(h, "delete_flow", { path: "busy.yaml", confirm: true });
+    expect(blocked.isError).toBe(true);
+    expect(blocked.body).toMatch(/run-1/);
+    expect(existsSync(file)).toBe(true);
+    h.runs.list = real;
+    writeFileSync(join(h.root, "broken.yaml"), "this: [is not\n a flow");
+    expect((await call(h, "delete_flow", { path: "broken.yaml", confirm: true })).json.deleted).toBe(true);
+    expect((await call(h, "delete_flow", { path: "busy.yaml", confirm: true })).json.deleted).toBe(true);
   });
 
   it("refuses to write outside the project folder or a non-YAML file", async () => {

@@ -105,6 +105,7 @@ Three prompts walk an agent through it: `author_flow`, `debug_failure`, `run_sui
 | `list_flows`, `describe_flow`, `read_flow` | Find flows (appId, tags, step count), read them as numbered steps with their line |
 | `write_flow` | Create a flow from a header and steps. Checked with Maestro first; never overwrites unless asked |
 | `edit_flow` | Insert, replace or delete steps, or change the header, keeping comments. `dryRun` previews |
+| `delete_flow` | Delete a flow file. Shows what would go unless `confirm: true`; refuses symlinks and flows a run is using |
 | `check_flow_syntax` | Validate flows without a device |
 
 **Runs and failures**
@@ -128,9 +129,9 @@ Three prompts walk an agent through it: `author_flow`, `debug_failure`, `run_sui
 
 ### Safety
 
-- `write_flow` and `edit_flow` only write inside the folder the server was started in, plus any
+- `write_flow`, `edit_flow` and `delete_flow` only touch files inside the folder the server was started in, plus any
   folders listed in `MAESTRO_DECK_FLOWS_DIRS` (separated like `PATH`). Paths that escape it, even
-  through a symlink, are refused, and only `.yaml` / `.yml` files are written.
+  through a symlink, are refused, and only `.yaml` / `.yml` files are written or deleted.
 - A flow is validated, structurally and by Maestro, before anything is written or changed.
 - Only one operation at a time drives a device: while a run uses it, `run_steps`,
   `get_view_hierarchy` and `find_selectors` say it is busy instead of fighting over the driver.

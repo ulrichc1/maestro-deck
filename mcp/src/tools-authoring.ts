@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
@@ -167,6 +167,39 @@ export function registerAuthoringTools(server: McpServer, deps: FullDeps): void 
         if (a.dryRun) return text({ path: abs, dryRun: true, summary, steps, content });
         writeFlowFile(abs, content);
         return text({ path: abs, summary, steps, syntax: "valid" });
+      } catch (err) {
+        return fail(message(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    "delete_flow",
+    {
+      description:
+        "Delete a flow file. Without confirm=true nothing is deleted: it only shows what would be removed. Limited to .yaml/.yml files inside the project folder (MAESTRO_DECK_FLOWS_DIRS); a symlink is refused, and so is a flow that a run in progress is using. A deleted file cannot be recovered.",
+      inputSchema: {
+        path: z.string().describe("The flow to delete, ending in .yaml"),
+        confirm: z.boolean().default(false).describe("Must be true to delete"),
+      },
+    },
+    async ({ path, confirm }) => {
+      try {
+        const abs = resolveWritableFlow(path, deps.flowRoots);
+        if (!existsSync(abs)) return fail(`Flow not found: ${abs}`);
+        if (statSync(abs).isDirectory()) return fail(`${abs} is a folder, not a flow.`);
+        const inUse = deps.runs.list().find((r) => (r.state === "running" || r.state === "queued") && r.flows.some((f) => resolve(f) === abs));
+        if (inUse) return fail(`${abs} is used by run ${inUse.id}, which is still ${inUse.state}. Cancel the run first (cancel_run).`);
+        let summary: { appId?: string; name?: string; steps?: number } = {};
+        try {
+          const info = describeFlow(readFileSync(abs, "utf8"));
+          summary = { appId: info.appId ?? info.url, name: info.name, steps: info.stepCount };
+        } catch {
+          // Not a valid flow any more: it can still be deleted.
+        }
+        if (!confirm) return text({ path: abs, deleted: false, wouldDelete: summary, note: "Nothing was deleted. Call again with confirm=true to delete it." });
+        unlinkSync(abs);
+        return text({ path: abs, deleted: true, was: summary });
       } catch (err) {
         return fail(message(err));
       }
